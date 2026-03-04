@@ -1,0 +1,341 @@
+---
+title: 'hcom list'
+description: 'Show active agents and their status'
+---
+
+## Overview
+
+List active instances with status, unread counts, and metadata. Query single agents or view recently stopped instances.
+
+## Syntax
+
+```bash
+hcom list [NAME] [FIELD] [FLAGS]
+```
+
+<ParamField path="NAME" type="string" optional>
+  Agent name or `self` for current identity
+  
+  When provided, shows single-agent details
+</ParamField>
+
+<ParamField path="FIELD" type="string" optional>
+  Extract specific field (requires NAME)
+  
+  Available fields: `name`, `status`, `session_id`, `directory`, `tool`, `transcript_path`, `parent_name`, `agent_id`
+</ParamField>
+
+## Flags
+
+<ParamField path="--json" type="boolean">
+  Output as JSON array
+  
+  Full listing or single-agent object
+</ParamField>
+
+<ParamField path="-v, --verbose" type="boolean">
+  Show detailed info (session_id, directory, bindings, transcript, etc.)
+</ParamField>
+
+<ParamField path="--names" type="boolean">
+  Output only names, one per line
+  
+  Useful for scripting
+</ParamField>
+
+<ParamField path="--sh" type="boolean">
+  Shell export format (requires NAME)
+  
+  Outputs `export HCOM_INSTANCE_NAME=...` statements
+  
+  ```bash
+  eval "$(hcom list self --sh)"
+  echo $HCOM_INSTANCE_NAME
+  ```
+</ParamField>
+
+<ParamField path="--format" type="string">
+  Custom format template with `{field}` placeholders
+  
+  ```bash
+  hcom list --format '{name} {status}'
+  ```
+  
+  Available fields: `name`, `status`, `status_context`, `status_detail`, `status_age_seconds`, `description`, `unread_count`, `headless`, `session_id`, `directory`, `parent_name`, `agent_id`, `tool`, `base_name`, `hooks_bound`, `process_bound`, `transcript_path`, `background_log_file`, `created_at`, `tag`, `launch_context`
+</ParamField>
+
+<ParamField path="--stopped" type="boolean">
+  Show recently stopped instances from life events
+  
+  Default: last 20
+  
+  Use with `--all` or `--last N` to control count
+</ParamField>
+
+<ParamField path="--all" type="boolean">
+  With `--stopped`: show all stopped instances (no limit)
+</ParamField>
+
+<ParamField path="--last" type="number">
+  With `--stopped`: limit to last N (default: 20)
+</ParamField>
+
+## Status Icons
+
+- `▶` **active** - Processing, reads messages very soon
+- `◉` **listening** - Idle, reads messages in less than 1s
+- `■` **blocked** - Needs human approval
+- `○` **inactive** - Dead or stale
+- `◦` **unknown** - Neutral
+
+## Tool Labels
+
+Binding state encoded in case/asterisk:
+
+- `[CLAUDE]` - PTY + hooks (hcom-launched)
+- `[claude]` - Hooks only (vanilla tool)
+- `[CLAUDE*]` - PTY only (no hooks bound)
+- `[claude*]` - No binding (ad-hoc mode)
+
+Same pattern for `GEMINI`, `CODEX`, `OPENCODE`, `AD-HOC`.
+
+## Examples
+
+### Full Listing
+
+```bash
+hcom list
+```
+
+Output:
+```
+Your name: luna
+
+[CLAUDE]   ▶ luna                now: processing
+[GEMINI]   ◉ nova                listening since 2m
+[CODEX]    ■ kira +3             3s ago: approval: bash command
+[OPENCODE] ◦ zeus [headless]     unknown
+
+Recently stopped (10m): apollo, athena
+  -> hcom list --stopped [name]
+```
+
+### Verbose Listing
+
+```bash
+hcom list -v
+```
+
+Output:
+```
+Your name: luna
+
+▶ luna                now: processing
+    session_id:   sess_abc123
+    tool:         claude
+    created:      5m ago
+    directory:    ~/my-project
+    bindings:     hooks, pty
+    transcript:   ~/.claude/sessions/sess_abc123/transcript.jsonl
+
+◉ nova                listening since 2m
+    session_id:   sess_def456
+    tool:         gemini
+    created:      10m ago
+    directory:    ~/my-project
+    bindings:     hooks
+    transcript:   ~/.gemini/sessions/sess_def456.json
+```
+
+### Query Self
+
+```bash
+hcom list self
+# Output: luna
+
+hcom list self status
+# Output: active
+
+hcom list self --json
+# Output: {"name":"luna","session_id":"sess_abc123","status":"active",...}
+```
+
+### Query Named Agent
+
+```bash
+hcom list nova
+# Output:
+# nova:
+#   Status: listening
+#   Directory: ~/my-project
+#   Session: sess_def456
+
+hcom list nova directory
+# Output: ~/my-project
+```
+
+### Names Only
+
+```bash
+hcom list --names
+# Output:
+# luna
+# nova
+# kira
+```
+
+### JSON Output
+
+```bash
+hcom list --json | jq '.[] | select(.status == "listening") | .name'
+# Output: nova
+```
+
+### Custom Format
+
+```bash
+hcom list --format '{name} ({tool}) - {status}'
+# Output:
+# luna (claude) - active
+# nova (gemini) - listening
+# kira (codex) - blocked
+```
+
+### Shell Exports
+
+```bash
+eval "$(hcom list self --sh)"
+echo $HCOM_INSTANCE_NAME
+# Output: luna
+
+echo $HCOM_SID
+# Output: sess_abc123
+```
+
+### Stopped Instances
+
+```bash
+# Recent stopped (last 20)
+hcom list --stopped
+
+# All stopped
+hcom list --stopped --all
+
+# Last 50
+hcom list --stopped --last 50
+
+# Specific stopped agent
+hcom list --stopped luna
+```
+
+Output (recent):
+```
+Stopped instances (last 20):
+
+  apollo (claude tag:dev) 5m ago  [self by:apollo]
+  athena (gemini) 10m ago  [external by:luna]
+
+  --all: show all  |  --last N: show last N
+  Details: hcom list --stopped <name>
+  Resume:  hcom r <name>
+```
+
+Output (specific):
+```
+Stopped: apollo
+  Time:       2026-03-04T10:23:45Z
+  By:         apollo
+  Reason:     self
+  Tool:       claude
+  Tag:        dev
+  Directory:  ~/my-project
+  Session:    sess_abc123
+  Transcript: ~/.claude/sessions/sess_abc123/transcript.jsonl
+
+  Resume: hcom r apollo
+```
+
+## Exit Codes
+
+<ResponseField name="0" type="success">
+  Success
+</ResponseField>
+
+<ResponseField name="1" type="error">
+  - Named agent not found
+  - Field not found
+  - Identity resolution failed (for `self`)
+  - Database query failed
+</ResponseField>
+
+## JSON Schema
+
+Full listing (`--json`) returns array of objects:
+
+```json
+[
+  {
+    "name": "luna",
+    "status": "active",
+    "status_context": "tool:Bash",
+    "status_detail": "ls -la",
+    "status_age_seconds": 3,
+    "description": "processing",
+    "unread_count": 0,
+    "headless": false,
+    "session_id": "sess_abc123",
+    "directory": "/Users/anno/my-project",
+    "parent_name": null,
+    "agent_id": null,
+    "background_log_file": null,
+    "transcript_path": "/Users/anno/.claude/sessions/sess_abc123/transcript.jsonl",
+    "created_at": 1709550000.0,
+    "tag": null,
+    "tool": "claude",
+    "base_name": "luna",
+    "hooks_bound": true,
+    "process_bound": true,
+    "launch_context": {
+      "terminal_preset": "kitty",
+      "pane_id": "123"
+    }
+  }
+]
+```
+
+## Notes
+
+<Note>
+  **Unread Counts**: Shown as `+N` suffix when agent has unread messages. Based on `last_event_id` cursor.
+</Note>
+
+<Note>
+  **Listening Since**: For idle agents in `listening` status for ≥60s, shows duration (`listening since 2m`).
+</Note>
+
+<Note>
+  **Subagent Timeout**: For subagents idle in `listening` status with less than 10s remaining before timeout, shows countdown (`⏱ 5s`).
+</Note>
+
+<Note>
+  **Remote Badge**: Instances from other devices (via relay) show `[remote]` suffix. Cannot be stopped locally.
+</Note>
+
+<Note>
+  **Headless Badge**: Background instances show `[headless]` suffix. Check `background_log_file` for logs.
+</Note>
+
+<Note>
+  **Stale Cleanup**: List automatically cleans up stale placeholders and instances idle >1h.
+</Note>
+
+<Note>
+  **Multiple Tools**: Tool prefix only shown when >1 tool type is active. Binding state encoded in case/asterisk.
+</Note>
+
+## Related Commands
+
+- [`hcom start`](/cli/start) - Connect to hcom
+- [`hcom stop`](/cli/stop) - Disconnect from hcom
+- [`hcom r`](/cli/resume) - Resume stopped agents
+- [`hcom send`](/cli/send) - Message agents

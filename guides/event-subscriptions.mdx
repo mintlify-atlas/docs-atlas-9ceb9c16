@@ -1,0 +1,366 @@
+---
+title: 'Event Subscriptions'
+description: 'Subscribe to agent activity and get notified of specific events'
+---
+
+Subscribe to events to monitor agent activity, track file changes, and react to state transitions. Subscriptions deliver matching events as hcom messages automatically.
+
+## Event Types
+
+hcom tracks three types of events:
+
+- **message** - Messages sent between agents
+- **status** - Agent state changes (active, listening, blocked)
+- **life** - Lifecycle events (created, started, stopped)
+
+## Query Events
+
+View recent events:
+
+```bash
+hcom events                    # Last 20 events
+hcom events --last 50          # Last 50 events
+hcom events --all              # Include archived sessions
+```
+
+Output (JSON):
+```json
+{"id":42,"ts":"2026-03-04T10:30:45","type":"message","instance":"luna","data":{"from":"nova","text":"Review complete"}}
+{"id":43,"ts":"2026-03-04T10:31:12","type":"status","instance":"luna","data":{"val":"listening","context":"deliver"}}
+```
+
+## Filter Events
+
+### By Agent
+
+```bash
+hcom events --agent luna
+```
+
+### By Type
+
+```bash
+hcom events --type message
+hcom events --type status
+hcom events --type life
+```
+
+### By Status
+
+```bash
+hcom events --status listening    # Idle agents
+hcom events --status active       # Working agents
+hcom events --status blocked      # Needs approval
+```
+
+### By File Operations
+
+```bash
+hcom events --file '*.py'         # All Python file edits
+hcom events --file src/auth.py    # Specific file
+```
+
+### By Shell Commands
+
+```bash
+hcom events --cmd git             # All git commands
+hcom events --cmd '^pytest'       # Commands starting with pytest
+hcom events --cmd 'npm install$'  # Commands ending with npm install
+```
+
+### By Message Sender
+
+```bash
+hcom events --from luna           # Messages from luna
+```
+
+### By Message Recipient
+
+```bash
+hcom events --mention luna        # Messages mentioning luna
+```
+
+### Combine Filters
+
+Filters combine with AND logic:
+
+```bash
+hcom events --agent peso --cmd git --last 10
+# Shows last 10 git commands by peso
+```
+
+## Event Subscriptions
+
+Subscriptions deliver future matching events as hcom messages from `[hcom-events]`.
+
+### Subscribe to Events
+
+```bash
+hcom events sub --file '*.py'
+# Output: Subscription sub-a1b2c3d4 created
+```
+
+When any Python file is edited:
+```
+[hcom-events] → you: [File edit] luna edited src/auth.py
+```
+
+### Subscribe to Agent State
+
+```bash
+hcom events sub --idle peso
+# Notified when peso goes idle
+```
+
+```bash
+hcom events sub --blocked peso
+# Notified when peso needs approval
+```
+
+### Subscribe to Commands
+
+```bash
+hcom events sub --cmd git --agent luna
+# Notified whenever luna runs a git command
+```
+
+### Subscribe to File Collisions
+
+```bash
+hcom events sub --collision
+```
+
+Notifies when two agents edit the same file within 30 seconds:
+```
+[hcom-events] → you: [Collision] luna and nova both edited src/db.py
+```
+
+## One-Shot Subscriptions
+
+Auto-remove after first match:
+
+```bash
+hcom events sub --file '*.py' --once
+```
+
+Useful for:
+- Waiting for a specific event
+- Triggering one-time reactions
+- Avoiding notification spam
+
+## Raw SQL Subscriptions
+
+For advanced filtering:
+
+```bash
+hcom events sub "type='message' AND msg_intent='request'"
+```
+
+SQL reference:
+```sql
+-- Available columns in events_v view:
+id, timestamp, type, instance
+msg_from, msg_text, msg_intent, msg_thread
+status_val, status_context, status_detail
+life_action, life_by
+```
+
+<Warning>
+SQL subscriptions bypass filter validation. Test with `hcom events --sql "..."` first.
+</Warning>
+
+## Managing Subscriptions
+
+### List Active Subscriptions
+
+```bash
+hcom events sub list
+```
+
+Output:
+```
+ID          FOR          MODE       FILTER
+sub-abc123  luna         continuous {"file":["*.py"]}
+sub-def456  nova         once       {"idle":["peso"]}
+```
+
+### Remove a Subscription
+
+```bash
+hcom events unsub sub-abc123
+```
+
+## Wait for Events
+
+Block until a matching event occurs:
+
+```bash
+hcom events --wait --idle peso
+# Blocks until peso goes idle (default 60s timeout)
+```
+
+Custom timeout:
+```bash
+hcom events --wait 120 --cmd pytest
+# Wait up to 120 seconds for pytest command
+```
+
+Use in scripts:
+```bash
+hcom 3 claude --tag workers -p "process logs"
+hcom events --wait --sql "life_action='ready' AND instance LIKE 'workers-%'"
+echo "All workers ready"
+```
+
+## Auto-Subscribe on Launch
+
+Automatically subscribe new agents:
+
+```bash
+hcom config auto_subscribe "collision,created"
+```
+
+Options:
+- **collision** - File edit conflicts
+- **created** - New agents joining
+- **stopped** - Agents stopping
+- **blocked** - Agents needing approval
+
+## Practical Examples
+
+### Monitor Code Changes
+
+```bash
+hcom events sub --file 'src/**/*.ts' --agent luna
+```
+
+### Track Test Runs
+
+```bash
+hcom events sub --cmd pytest --once
+```
+
+### Coordinate Agent Handoffs
+
+```bash
+hcom events sub --idle reviewer --once
+# When reviewer goes idle, send next task
+```
+
+### Watch for Errors
+
+```bash
+hcom events sub --cmd --sql "status_context='tool:Bash' AND status_detail LIKE '%error%'"
+```
+
+## Subscription Delivery
+
+Subscriptions deliver events as messages:
+
+```
+[hcom-events] → you: [Status change] peso is now listening
+[hcom-events] → you: [File edit] nova edited src/db.py (tool:Edit)
+[hcom-events] → you: [Shell command] luna: git commit -m "fix auth"
+```
+
+Messages appear during your turn or wake you if idle.
+
+## Event Stream Details
+
+### Message Events
+
+Data fields:
+```json
+{
+  "from": "nova",
+  "text": "Review complete",
+  "scope": "mentions",
+  "intent": "inform",
+  "thread": "pr-123",
+  "delivered_to": ["luna"]
+}
+```
+
+### Status Events
+
+Data fields:
+```json
+{
+  "val": "active",
+  "context": "tool:Bash",
+  "detail": "git status"
+}
+```
+
+### Life Events
+
+Data fields:
+```json
+{
+  "action": "stopped",
+  "by": "luna",
+  "reason": "task complete"
+}
+```
+
+## Troubleshooting
+
+### Subscription Not Firing
+
+Test the filter with query mode:
+
+```bash
+hcom events --file '*.py' --last 5
+# Should show recent Python file edits
+```
+
+Check active subscriptions:
+
+```bash
+hcom events sub list
+```
+
+### Too Many Notifications
+
+Make filters more specific:
+
+```bash
+# Too broad:
+hcom events sub --file '*'
+
+# Better:
+hcom events sub --file 'src/**/*.py' --agent luna
+```
+
+Or use one-shot subscriptions:
+```bash
+hcom events sub --file '*.py' --once
+```
+
+### Missing Historical Events
+
+Subscriptions only match **future** events. To see past events:
+
+```bash
+hcom events --file '*.py' --last 50
+```
+
+## Best Practices
+
+<Tip>
+- Use **--once** for single-trigger reactions
+- Use **--collision** to catch concurrent edits early
+- Use **--idle** subscriptions to coordinate handoffs
+- Use **--file** patterns to track specific modules
+- Test filters with query mode before subscribing
+</Tip>
+
+<Warning>
+Subscriptions persist until explicitly removed. Clean up unused subscriptions with `hcom events sub list` and `hcom events unsub <id>`.
+</Warning>
+
+## Next Steps
+
+- [Read agent transcripts](/guides/transcripts)
+- [Create context bundles](/guides/bundles)
+- [Automate workflows](/guides/workflows)

@@ -1,0 +1,488 @@
+---
+title: 'Workflow Automation'
+description: 'Automate multi-agent workflows with bundled scripts and custom automations'
+---
+
+Create automated multi-agent workflows using bundled scripts or write your own custom automation. hcom includes battle-tested workflow templates for common patterns.
+
+## Bundled Workflows
+
+hcom ships with three workflow scripts:
+
+### Confess - Honesty Self-Evaluation
+
+Based on OpenAI's confessions paper. An agent generates a self-evaluation, a calibrator analyzes the transcript independently, and a judge compares both reports.
+
+```bash
+hcom run confess
+```
+
+**How it works:**
+
+1. **You** (the confessor) generate your own ConfessionReport about recent work
+2. **Calibrator** (fresh instance) analyzes your transcript independently as baseline
+3. **Judge** (fresh instance) compares both reports and sends verdict back to you
+
+**Options:**
+
+```bash
+# Evaluate specific task
+hcom run confess --task "the auth refactor"
+
+# Fork mode: spawn confessor with your memory
+hcom run confess --fork
+
+# Evaluate another agent
+hcom run confess --target nova --fork
+```
+
+**Use cases:**
+- Self-assessment after complex work
+- Detect reasoning gaps
+- Calibrate confidence vs accuracy
+- Compare self-perception vs reality
+
+### Debate - Structured Argumentation
+
+Launch PRO/CON debaters (fresh or existing agents) with a judge to evaluate a topic in a shared hcom thread.
+
+```bash
+hcom run debate "AI will replace programmers" --spawn
+```
+
+**Two modes:**
+
+**Spawn mode** - Launch fresh PRO/CON instances:
+```bash
+hcom run debate "tabs vs spaces" --spawn --rounds 3
+```
+
+**Workers mode** - Use existing agents:
+```bash
+hcom run debate "microservices vs monolith" -w sity,offu
+```
+
+**Options:**
+
+```bash
+--spawn, -s              Launch fresh PRO/CON instances
+--workers, -w NAMES      Use existing instances (comma-separated)
+--tool TOOL              AI tool for spawned instances (default: claude)
+--rounds, -r N           Number of rebuttal rounds (default: 2)
+--timeout, -t N          Response timeout in seconds (default: 120)
+--context, -c TEXT       Context for debate
+-i, --interactive        Launch in terminal windows
+```
+
+**Watch live:**
+```bash
+hcom events --wait 600 --sql "msg_thread='debate-1234567890'"
+```
+
+**Use cases:**
+- Evaluate design decisions
+- Challenge assumptions
+- Generate diverse perspectives
+- Test argument robustness
+
+### Fatcow - Codebase Oracle
+
+A "fat" agent that deeply reads a codebase module and answers questions on demand. Subscribes to file changes to stay current.
+
+```bash
+hcom run fatcow --path src/tools
+```
+
+**Two modes:**
+
+**Live (default)** - Stays running, subscribes to changes:
+```bash
+hcom run fatcow --path src/tools
+```
+
+**Dead** - Ingests then stops, resumed on demand:
+```bash
+hcom run fatcow --path src/tools --dead
+```
+
+**Query the fatcow:**
+
+Live fatcow:
+```bash
+hcom send "@fatcow.tools what functions does auth.py export?"
+```
+
+Dead fatcow:
+```bash
+hcom run fatcow --ask fatcow.tools-luna "what does db.py export?"
+```
+
+**Options:**
+
+```bash
+--path PATH              Directory or file to ingest (required)
+--focus, -f TEXT         Comma-separated focus areas
+--dead                   Ingest then stop
+-i, --interactive        Launch in terminal
+--ask FATCOW QUESTION    Query a fatcow
+--timeout N              Response timeout (default: 120)
+```
+
+**Use cases:**
+- Module documentation
+- Code search assistant
+- Onboarding tool
+- Cross-reference lookup
+
+## Running Workflows
+
+### List Available Workflows
+
+```bash
+hcom run
+```
+
+Output:
+```
+Available workflow scripts:
+
+  confess   Honesty self-evaluation
+  debate    Structured debate with judge
+  fatcow    Fat codebase oracle agent
+
+Run: hcom run <name> --help
+```
+
+### Get Help
+
+```bash
+hcom run confess --help
+hcom run debate --help
+hcom run fatcow --help
+```
+
+### View Source
+
+```bash
+hcom run confess --source
+hcom run debate --source
+hcom run fatcow --source
+```
+
+## Creating Custom Workflows
+
+Write your own workflow scripts in `~/.hcom/scripts/`.
+
+### Shell Script Template
+
+Create `~/.hcom/scripts/myscript.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Brief description shown in hcom run list.
+set -euo pipefail
+
+# Parse arguments
+name_flag=""
+target=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) 
+      echo "Usage: hcom run myscript [OPTIONS]"
+      exit 0 ;;
+    --name) name_flag="$2"; shift 2 ;;
+    --target) target="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+# Forward --name to hcom commands
+name_arg=""
+[[ -n "$name_flag" ]] && name_arg="--name $name_flag"
+
+# Cleanup launched agents on error
+LAUNCHED_NAMES=()
+cleanup() {
+  for name in "${LAUNCHED_NAMES[@]}"; do
+    hcom stop "$name" --go 2>/dev/null || true
+  done
+}
+trap cleanup ERR
+
+# Track launched agents from output
+track_launch() {
+  local output="$1"
+  local names
+  names=$(echo "$output" | grep '^Names: ' | sed 's/^Names: //')
+  for n in $names; do
+    LAUNCHED_NAMES+=("$n")
+  done
+}
+
+# Launch agent
+launch_out=$(hcom 1 claude --tag worker --go --headless 2>&1)
+track_launch "$launch_out"
+
+# Do work
+hcom send "@worker" $name_arg -- "Do the task"
+
+# Wait for completion
+hcom events --wait 120 --idle worker
+
+echo "Workflow complete"
+```
+
+Make executable:
+```bash
+chmod +x ~/.hcom/scripts/myscript.sh
+```
+
+Run it:
+```bash
+hcom run myscript
+```
+
+### Identity Handling
+
+hcom passes `--name` to scripts automatically. Always parse and forward it:
+
+```bash
+name_arg=""
+[[ -n "$name_flag" ]] && name_arg="--name $name_flag"
+hcom send @target $name_arg -- "message"
+hcom list self --json $name_arg
+```
+
+### Launch Coordination
+
+Parse launched agent names from output:
+
+```bash
+launch_out=$(hcom 1 claude --tag worker --go --headless 2>&1)
+track_launch "$launch_out"
+
+# Now LAUNCHED_NAMES contains the agent name(s)
+for name in "${LAUNCHED_NAMES[@]}"; do
+  echo "Launched: $name"
+done
+```
+
+### Error Handling
+
+Set up cleanup trap:
+
+```bash
+trap cleanup ERR
+
+cleanup() {
+  if [[ ${#LAUNCHED_NAMES[@]} -gt 0 ]]; then
+    for name in "${LAUNCHED_NAMES[@]}"; do
+      hcom stop "$name" --go 2>/dev/null || true
+    done
+  fi
+}
+```
+
+## Workflow Patterns
+
+### Parallel Execution
+
+```bash
+# Launch multiple workers
+hcom 5 claude --tag workers -p "process logs" --headless
+
+# Distribute work
+hcom send @workers -- "Split the work: each take one server"
+
+# Wait for all to finish
+hcom events --wait 300 --sql "life_action='stopped' AND instance LIKE 'workers-%'"
+```
+
+### Sequential Handoffs
+
+```bash
+# Phase 1: Analysis
+hcom 1 claude --tag analyzer -p "analyze the codebase" --headless
+hcom events --wait --idle analyzer
+
+# Phase 2: Review
+hcom 1 claude --tag reviewer --headless
+hcom send @reviewer -- "Review analyzer's findings: $(hcom transcript @analyzer --last 5)"
+```
+
+### Judge Pattern
+
+```bash
+# Launch workers
+hcom 2 claude --tag workers -p "implement feature X" --headless
+
+# Launch judge
+hcom 1 claude --tag judge --headless \
+  --hcom-prompt "Compare the two implementations and recommend the best approach"
+
+# Judge coordinates
+hcom send @judge -- "Workers are @workers-luna and @workers-nova"
+```
+
+### Fork & Compare
+
+```bash
+# Fork current session
+hcom f self
+
+# Now you have two paths to explore
+hcom send @self-fork -- "Try approach A"
+# You try approach B
+
+# Compare results later
+hcom transcript @self --range 20-25
+hcom transcript @self-fork --range 1-5
+```
+
+## Practical Examples
+
+### Code Review Workflow
+
+```bash
+#!/usr/bin/env bash
+# Multi-agent code review
+set -euo pipefail
+
+LAUNCHED_NAMES=()
+trap cleanup ERR
+cleanup() {
+  for n in "${LAUNCHED_NAMES[@]}"; do hcom stop "$n" --go 2>/dev/null || true; done
+}
+track_launch() {
+  names=$(echo "$1" | grep '^Names: ' | sed 's/^Names: //')
+  for n in $names; do LAUNCHED_NAMES+=("$n"); done
+}
+
+# Get changed files
+files=$(git diff --name-only main)
+
+# Launch reviewers
+launch_out=$(hcom 3 claude --tag reviewers --headless --go 2>&1)
+track_launch "$launch_out"
+
+# Distribute files
+echo "$files" | xargs -n1 -I{} hcom send @reviewers -- "Review file: {}"
+
+# Wait for completion
+hcom events --wait 600 --sql "instance LIKE 'reviewers-%' AND status_val='listening'"
+
+echo "Review complete. Check messages for feedback."
+```
+
+### Test Suite Parallelization
+
+```bash
+#!/usr/bin/env bash
+# Run test suite in parallel
+set -euo pipefail
+
+test_files=(tests/test_*.py)
+count=${#test_files[@]}
+
+# Launch workers
+launch_out=$(hcom $count claude --tag testers --headless --go 2>&1)
+
+# Assign one file per tester
+for i in "${!test_files[@]}"; do
+  file="${test_files[$i]}"
+  agent="testers-$(printf '%03d' $((i+1)))"
+  hcom send "@$agent" -p "pytest $file"
+done
+
+# Wait for all to finish
+hcom events --wait 300 --sql "life_action='stopped' AND instance LIKE 'testers-%'"
+
+echo "All tests complete"
+```
+
+### Iterative Refinement
+
+```bash
+#!/usr/bin/env bash
+# Implement -> Review -> Refine loop
+set -euo pipefail
+
+for iteration in {1..3}; do
+  echo "Iteration $iteration"
+  
+  # Implement
+  hcom 1 claude --tag impl-$iteration -p "implement feature" --headless --go
+  hcom events --wait --idle impl-$iteration
+  
+  # Review
+  hcom 1 claude --tag review-$iteration --headless --go \
+    --hcom-prompt "Review impl-$iteration's work and suggest improvements"
+  hcom events --wait --idle review-$iteration
+  
+  # Extract feedback
+  feedback=$(hcom transcript @review-$iteration --last 1)
+  
+  if [[ "$feedback" =~ "LGTM" ]]; then
+    echo "Approved!"
+    break
+  fi
+done
+```
+
+## Workflow Best Practices
+
+<Tip>
+- **Use --headless** for background agents
+- **Track launched agents** for cleanup
+- **Set up error traps** to kill agents on failure
+- **Use tags** to organize workflow agents
+- **Use --go flag** to skip confirmation when inside AI tools
+- **Forward --name** argument to all hcom commands
+</Tip>
+
+<Warning>
+Always set up cleanup traps to stop agents when workflows fail. Orphaned headless agents waste resources.
+</Warning>
+
+## Troubleshooting
+
+### Workflow Hangs
+
+Check agent status:
+
+```bash
+hcom list
+```
+
+Check if waiting on approval:
+```bash
+hcom events --blocked --last 5
+```
+
+### Agents Not Responding
+
+Verify they received messages:
+
+```bash
+hcom events --type message --last 10
+```
+
+Check for errors:
+```bash
+hcom transcript @worker --last 3 --detailed
+```
+
+### Cleanup Failed
+
+Manually stop workflow agents:
+
+```bash
+hcom stop tag:reviewers
+hcom stop tag:workers
+```
+
+## Next Steps
+
+- [Cross-device relay](/guides/cross-device)
+- [Event subscriptions](/guides/event-subscriptions)
+- [Creating context bundles](/guides/bundles)

@@ -1,0 +1,523 @@
+---
+title: hcom bundle
+description: Create and manage structured context packages for agent handoffs
+---
+
+## Overview
+
+Bundles package structured context (files, events, transcript) for clean handoffs between agents. They create a durable reference that can be expanded later, avoiding large copy-paste blocks.
+
+## Quick Start
+
+```bash
+# Prepare bundle context (shows what to include)
+hcom bundle prepare
+
+# Create bundle
+hcom bundle create "Auth Fix" \
+  --description "Fixed token validation bug in auth.py" \
+  --events "100-105" \
+  --files "src/auth.py,tests/test_auth.py" \
+  --transcript "15-20:detailed"
+
+# View bundle
+hcom bundle cat bundle:xyz789
+
+# Send with bundle (inline creation)
+hcom send @nova \
+  --title "Auth Fix" \
+  --description "Context for review" \
+  --events "100-105" \
+  --files "src/auth.py" \
+  --transcript "15-20:normal" \
+  -- Ready for review
+```
+
+## List Bundles
+
+```bash
+hcom bundle [list] [--last N] [--json]
+```
+
+Show recent bundles (default: last 20).
+
+<ParamField path="--last" type="number" default="20">
+  Limit to last N bundles
+  
+  ```bash
+  hcom bundle --last 10
+  ```
+</ParamField>
+
+<ParamField path="--json" type="boolean">
+  JSON output
+  
+  ```bash
+  hcom bundle list --json
+  ```
+</ParamField>
+
+### Example Output
+
+```
+BUNDLE_ID    TITLE                          BY           AGE
+bundle:abc1  Auth Fix                       luna         5m
+bundle:def2  Database Migration             nova         1h
+bundle:ghi3  API Refactor                   kira         3h
+```
+
+## View Bundle
+
+```bash
+hcom bundle show <id> [--json]
+hcom bundle <id>  # implicit show
+```
+
+Show bundle metadata (title, description, ref counts).
+
+<ParamField path="id" type="string" required>
+  Bundle ID or prefix
+  
+  Accepts:
+  - Event ID: `123`
+  - Full bundle ID: `bundle:abc123xyz`
+  - Prefix: `abc123` (matches `bundle:abc123xyz`)
+  
+  ```bash
+  hcom bundle show 123
+  hcom bundle show bundle:abc123
+  hcom bundle show abc123
+  ```
+</ParamField>
+
+### Example Output
+
+```
+Bundle: bundle:abc123xyz
+Title: Auth Fix
+By: luna
+Description: Fixed token validation bug in auth.py. Updated tests.
+
+Events: 6 referenced
+Files: 2 referenced
+Transcript: 1 ranges
+```
+
+## Expand Bundle
+
+```bash
+hcom bundle cat <id>
+```
+
+Expand full bundle content (files metadata, transcript text, events).
+
+### Files Section
+
+Shows file metadata with size, line count, and modification time:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILES (2)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+src/auth.py (245 lines, 8.2 KB, modified 10m ago)
+tests/test_auth.py (180 lines, 5.4 KB, modified 10m ago)
+```
+
+### Transcript Section
+
+Respects detail level specified in bundle:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TRANSCRIPT (1 entries)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+--- Transcript [15-20] (detailed) ---
+
+#15
+  User: Fix the token validation bug
+  Action: I'll analyze the auth flow and fix the issue...
+  Tools: Read(auth.py), Edit(auth.py), Bash
+
+#16
+  User: Run the tests
+  Action: Running test suite...
+  Tools: Bash
+```
+
+### Events Section
+
+Full JSON output for each event (supports ranges like `100-105`):
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EVENTS (6)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{
+  "id": 100,
+  "timestamp": "2026-03-04T10:30:00Z",
+  "type": "message",
+  "instance": "luna",
+  "data": {...}
+}
+```
+
+## Bundle Chain
+
+```bash
+hcom bundle chain <id> [--json]
+```
+
+Show bundle lineage (parent chain via `extends` field).
+
+### Example
+
+```bash
+hcom bundle chain bundle:ghi3
+```
+
+Output:
+```
+Bundle chain (3 levels):
+→ bundle:ghi3: Production Deploy
+  ↳ bundle:def2: Staging Deploy
+    ↳ bundle:abc1: Auth Fix
+```
+
+## Prepare Bundle
+
+```bash
+hcom bundle prepare [--for AGENT] [--last-transcript N] [--last-events N] [--compact] [--json]
+```
+
+Analyze recent context and generate bundle template. Shows transcript, events, and files to help you decide what to include.
+
+<ParamField path="--for" type="string">
+  Target agent (default: self)
+  
+  ```bash
+  hcom bundle prepare --for luna
+  ```
+</ParamField>
+
+<ParamField path="--last-transcript" type="number" default="40">
+  Last N transcript exchanges to suggest
+  
+  ```bash
+  hcom bundle prepare --last-transcript 20
+  ```
+</ParamField>
+
+<ParamField path="--last-events" type="number" default="10">
+  Events per category to scan
+  
+  ```bash
+  hcom bundle prepare --last-events 20
+  ```
+</ParamField>
+
+<ParamField path="--compact" type="boolean">
+  Hide how-to section
+  
+  ```bash
+  hcom bundle prepare --compact
+  ```
+</ParamField>
+
+<ParamField path="--json" type="boolean">
+  JSON output with transcript text and template command
+  
+  ```bash
+  hcom bundle prepare --json
+  ```
+</ParamField>
+
+### Example Output
+
+```
+[Bundle Context: luna]
+
+────────────────────────────────────────
+HOW TO USE THIS CONTEXT:
+
+Use 'hcom send' with bundle flags to create and send directly
+Transcript detail: normal | full | detailed
+
+Use this as a template - pick relevant items:
+- Use hcom events and hcom transcript to explore
+- Specify correct transcript detail per range
+- Description: comprehensive explanation of what happened,
+  decisions, current state, issues, plans
+
+A good bundle includes everything relevant and nothing irrelevant.
+
+────────────────────────────────────────
+TRANSCRIPT
+
+#15 | 2026-03-04 10:30
+User: Fix the token validation bug
+Action: I'll analyze the authentication flow...
+
+#16 | 2026-03-04 10:35
+User: Run the tests
+Action: Running test suite...
+
+--- Messages to (5 events) ---
+  #98  | luna @ 2026-03-04 10:20 | "can you help?"
+  #99  | luna @ 2026-03-04 10:25 | "review PR #42"
+  ...
+
+--- File operations (3 events) ---
+  #100 | luna @ 2026-03-04 10:30 | Edit:auth.py
+  #102 | luna @ 2026-03-04 10:32 | Write:test_auth.py
+  ...
+
+────────────────────────────────────────
+FILES (5)
+  src/auth.py
+  tests/test_auth.py
+  config.json
+  ...
+
+────────────────────────────────────────
+CREATE:
+hcom bundle create "Bundle Title Here" --name luna \
+  --description "detailed description text here" \
+  --transcript "15-20:normal    //can be multiple: 3-14:normal,6:full,22-30:detailed" \
+  --events "98,99,100,102" \
+  --files "src/auth.py,tests/test_auth.py"
+```
+
+## Create Bundle
+
+```bash
+hcom bundle create <title> [options]
+```
+
+Create a bundle event in the database.
+
+<ParamField path="title" type="string" required>
+  Bundle title (positional or `--title` flag)
+  
+  ```bash
+  hcom bundle create "Auth Fix"
+  hcom bundle create --title "Auth Fix"
+  ```
+</ParamField>
+
+<ParamField path="--description" type="string" required>
+  Bundle description (required)
+  
+  Should comprehensively explain:
+  - What happened
+  - Decisions made
+  - Current state
+  - Issues encountered
+  - Next steps
+  
+  ```bash
+  --description "Fixed token validation. Updated auth.py and tests. Ready for staging."
+  ```
+</ParamField>
+
+<ParamField path="--events" type="string">
+  Comma-separated event IDs or ranges
+  
+  ```bash
+  --events "100,101,105-110"
+  ```
+</ParamField>
+
+<ParamField path="--files" type="string">
+  Comma-separated file paths
+  
+  ```bash
+  --files "src/auth.py,tests/test_auth.py,README.md"
+  ```
+</ParamField>
+
+<ParamField path="--transcript" type="string">
+  Transcript ranges with detail levels
+  
+  Format: `<range>:<detail>[,<range>:<detail>...]`
+  
+  **Detail levels:**
+  - **normal** - Truncated (user: full, action: ~200 chars, tools: names only)
+  - **full** - Complete text (no truncation)
+  - **detailed** - Complete text + tool I/O, edits, errors
+  
+  ```bash
+  --transcript "3-14:normal,6:full,22-30:detailed"
+  --transcript "15-20:detailed"
+  ```
+</ParamField>
+
+<ParamField path="--extends" type="string">
+  Parent bundle ID (creates chain)
+  
+  ```bash
+  --extends bundle:abc123
+  ```
+</ParamField>
+
+<ParamField path="--json" type="boolean">
+  Output bundle ID as JSON
+  
+  ```bash
+  hcom bundle create "title" --description "desc" --json
+  ```
+</ParamField>
+
+### Raw JSON Mode
+
+<ParamField path="--bundle" type="string">
+  Raw bundle JSON string
+  
+  ```bash
+  hcom bundle create --bundle '{...}'
+  ```
+</ParamField>
+
+<ParamField path="--bundle-file" type="string">
+  Path to bundle JSON file
+  
+  ```bash
+  hcom bundle create --bundle-file bundle.json
+  ```
+</ParamField>
+
+## Bundle JSON Format
+
+```json
+{
+  "title": "Bundle Title",
+  "description": "Comprehensive description of what happened, decisions, current state, next steps",
+  "refs": {
+    "events": ["123", "124-130"],
+    "files": ["src/auth.py", "tests/test_auth.py"],
+    "transcript": ["10-15:normal", "20:full", "30-35:detailed"]
+  },
+  "extends": "bundle:abc123"  // optional
+}
+```
+
+### Fields
+
+- **title** (string, required) - Short bundle name
+- **description** (string, required) - Comprehensive context
+- **refs** (object, required) - References to context items
+  - **events** (array) - Event IDs or ranges (e.g., `"100-105"`)
+  - **files** (array) - File paths
+  - **transcript** (array) - Ranges with detail (e.g., `"10-15:normal"`)
+- **extends** (string, optional) - Parent bundle ID
+
+## Examples
+
+### Simple Bundle
+
+```bash
+hcom bundle create "Quick Fix" \
+  --description "Fixed typo in config" \
+  --files "config.json" \
+  --events "123"
+```
+
+### Comprehensive Handoff
+
+```bash
+hcom bundle create "Auth Refactor Complete" \
+  --description "Refactored authentication system. Moved token validation to middleware. Updated all routes. Tests passing. Ready for staging deployment." \
+  --events "100-120,125" \
+  --files "src/auth.py,src/middleware.py,tests/test_auth.py" \
+  --transcript "10-25:detailed"
+```
+
+### Chained Context
+
+```bash
+# Initial work
+BUNDLE1=$(hcom bundle create "Investigation" \
+  --description "Found bug in auth.py line 45" \
+  --transcript "1-5:normal")
+
+# Follow-up work
+hcom bundle create "Fix Applied" \
+  --description "Fixed the bug, added tests" \
+  --files "src/auth.py,tests/test_auth.py" \
+  --transcript "6-10:detailed" \
+  --extends "$BUNDLE1"
+```
+
+### Send with Bundle
+
+Create bundle inline while sending:
+
+```bash
+hcom send @nova \
+  --title "Staging Deploy Ready" \
+  --description "All tests passed. Database migration complete. Config updated." \
+  --events "200-215" \
+  --files "migrations/001.sql,config/staging.json" \
+  --transcript "30-35:normal" \
+  --intent request \
+  -- Ready for staging deployment. Full context attached.
+```
+
+Message includes formatted bundle summary:
+
+```
+Ready for staging deployment. Full context attached.
+
+[Bundle bundle:xyz789]
+Title: Staging Deploy Ready
+Description: All tests passed. Database migration complete...
+Refs:
+  events: 200-215
+  files: migrations/001.sql,config/staging.json
+  transcript: 30-35:normal
+
+View bundle:
+  hcom bundle cat bundle:xyz789
+```
+
+### Workflow: Prepare → Edit → Create
+
+```bash
+# 1. Generate template
+hcom bundle prepare --json > bundle_draft.json
+
+# 2. Edit JSON (pick relevant items, write description)
+vim bundle_draft.json
+
+# 3. Create from file
+hcom bundle create --bundle-file bundle_draft.json
+```
+
+### Script Usage
+
+```bash
+# Create and capture ID
+BUNDLE_ID=$(hcom bundle create "Task Complete" \
+  --description "Task done" \
+  --events "100-105")
+
+# Send with bundle reference
+hcom send @manager -- Task complete. Context: $BUNDLE_ID
+
+# Check lineage
+hcom bundle chain "$BUNDLE_ID"
+```
+
+## Notes
+
+- Bundle events stored in database with type `bundle`
+- Bundle IDs: `bundle:<timestamp>_<random>` (8 chars)
+- Event ranges expanded during `cat` (e.g., `100-105` → 6 events)
+- File paths stored as provided (relative or absolute)
+- Transcript detail level respected in expansion
+- Missing files shown as "(not found)" in `cat`
+- Bundles are immutable after creation
+- `extends` creates parent chain (view with `chain`)
+- Prefix matching: `abc` matches `bundle:abc123xyz`

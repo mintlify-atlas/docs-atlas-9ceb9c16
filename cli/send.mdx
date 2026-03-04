@@ -1,0 +1,356 @@
+---
+title: hcom send
+description: Send messages to agents with envelope options and inline bundles
+---
+
+## Overview
+
+Send messages to agents with support for targeting, message envelopes (intent, reply-to, thread), and inline bundle creation.
+
+## Basic Usage
+
+```bash
+# Direct message
+hcom send @luna -- Hello there!
+
+# Multiple targets
+hcom send @luna @nova -- Can you help?
+
+# Broadcast to all
+hcom send -- Broadcast message to everyone
+```
+
+## Message Sources
+
+### Literal Text (--)
+
+Everything after `--` is treated as the message. No quotes needed:
+
+```bash
+hcom send @luna -- This is a message with multiple words
+```
+
+### Pipe/stdin
+
+```bash
+echo 'Complex message' | hcom send @luna
+
+cat message.txt | hcom send @luna
+
+hcom send @luna <<'EOF'
+Multi-line message
+with special chars
+EOF
+```
+
+### File
+
+```bash
+hcom send @luna --file /path/to/message.txt
+```
+
+### Base64
+
+```bash
+hcom send @luna --base64 aGVsbG8gd29ybGQ=
+```
+
+## Target Matching
+
+<ParamField path="@name" type="string">
+  **Base name match** - Matches agents with this base name
+  
+  Example: `@luna` matches `luna`, `api-luna`, `luna-worker`
+  
+  Note: Underscore blocks prefix matching. `@luna` does NOT match `luna_reviewer_1`
+</ParamField>
+
+<ParamField path="@full-name" type="string">
+  **Exact match** - Matches the full agent name exactly
+  
+  Example: `@api-luna` matches only `api-luna`
+</ParamField>
+
+<ParamField path="@prefix-" type="string">
+  **Prefix match** - Matches all agents with this tag/prefix
+  
+  Example: `@api-` matches `api-luna`, `api-nova`, `api-worker`
+</ParamField>
+
+<ParamField path="@name:DEVICE" type="string">
+  **Remote agent** - Matches agent on another device
+  
+  Example: `@luna:BOXE` matches agent `luna` on device with ID `BOXE`
+</ParamField>
+
+### Broadcast
+
+Omit targets to broadcast to all agents:
+
+```bash
+hcom send -- System maintenance in 5 minutes
+```
+
+## Message Envelope
+
+### Intent
+
+<ParamField path="--intent" type="enum" default="inform">
+  Message intent type:
+  
+  - **request** - Expect a response. Creates auto-subscription to track when recipients go idle or stop.
+  - **inform** - FYI, no response needed
+  - **ack** - Reply to a request (requires `--reply-to`)
+  
+  ```bash
+  hcom send @luna --intent request -- Can you review PR #42?
+  hcom send @nova --intent inform -- Deployment complete
+  hcom send @luna --intent ack --reply-to 123 -- Done
+  ```
+</ParamField>
+
+### Reply-to
+
+<ParamField path="--reply-to" type="string">
+  Link to event ID to create message threads
+  
+  Format: `<event_id>` or `<event_id>:<device_id>` for remote events
+  
+  When replying, the parent's thread is inherited automatically if not specified.
+  
+  ```bash
+  hcom send @luna --reply-to 42 -- Here's the answer
+  hcom send @nova --reply-to 123:BOXE -- Replying to remote message
+  ```
+  
+  **Validation:**
+  - Intent `ack` requires `--reply-to`
+  - Cannot `ack` an `inform` message
+  - Cannot `ack` an `ack` (prevents loops)
+</ParamField>
+
+### Thread
+
+<ParamField path="--thread" type="string">
+  Group related messages in a named thread
+  
+  Thread names must be alphanumeric with hyphens/underscores (max 64 chars).
+  
+  ```bash
+  hcom send @luna --thread pr-99 -- Starting review
+  hcom send @nova --thread pr-99 -- Found issues in auth.py
+  hcom send @luna --thread pr-99 -- Fixed
+  ```
+</ParamField>
+
+## Sender Identity
+
+<ParamField path="--from" type="string">
+  Send as external sender (non-agent identity)
+  
+  Creates messages from `external` sender kind. Useful for scripts, bots, or system notifications.
+  
+  ```bash
+  hcom send @all --from ci-bot -- Build #1234 passed
+  hcom send @luna --from reviewer -- Code review feedback
+  ```
+  
+  **Restrictions:**
+  - Subagents cannot use `--from` (prevents spoofing)
+  - Name must be 1-50 chars, no special characters
+</ParamField>
+
+<ParamField path="-b" type="boolean">
+  Shorthand for `--from bigboss`
+  
+  ```bash
+  hcom send @all -b -- All hands meeting at 3pm
+  ```
+  
+  Note: `--from` overrides `-b` if both are specified
+</ParamField>
+
+## Inline Bundle Creation
+
+Create and attach a context bundle directly in the send command:
+
+<ParamField path="--title" type="string" required>
+  Bundle title (required when using bundle flags)
+</ParamField>
+
+<ParamField path="--description" type="string" required>
+  Bundle description (required with `--title`)
+  
+  Should comprehensively explain what happened, decisions made, current state, and next steps.
+</ParamField>
+
+<ParamField path="--events" type="string">
+  Comma-separated event IDs or ranges
+  
+  ```bash
+  --events "123,124,130-135"
+  ```
+</ParamField>
+
+<ParamField path="--files" type="string">
+  Comma-separated file paths
+  
+  ```bash
+  --files "src/auth.py,tests/test_auth.py,README.md"
+  ```
+</ParamField>
+
+<ParamField path="--transcript" type="string">
+  Transcript ranges with detail levels
+  
+  Format: `<range>:<detail>[,<range>:<detail>...]`
+  
+  **Detail levels:**
+  - `normal` - Truncated responses (user: full, action: ~200 chars, tools: names only)
+  - `full` - Complete text (no truncation)
+  - `detailed` - Complete text + tool I/O, file edits, errors
+  
+  ```bash
+  --transcript "3-14:normal,6:full,22-30:detailed"
+  ```
+</ParamField>
+
+<ParamField path="--extends" type="string">
+  Parent bundle ID to extend/chain from
+  
+  ```bash
+  --extends bundle:abc123
+  ```
+</ParamField>
+
+### Bundle Example
+
+```bash
+hcom send @nova \
+  --title "Auth Bug Investigation" \
+  --description "Found root cause in token validation. Fixed in auth.py, needs testing." \
+  --events "100-105,110" \
+  --files "src/auth.py,tests/test_auth.py" \
+  --transcript "15-20:normal,18:detailed" \
+  -- Ready for review. Bundle attached with full context.
+```
+
+The bundle is created as an event, attached to the message, and the message includes a formatted summary:
+
+```
+[Bundle bundle:xyz789]
+Title: Auth Bug Investigation
+Description: Found root cause in token validation...
+Refs:
+  events: 100-105,110
+  files: src/auth.py,tests/test_auth.py
+  transcript: 15-20:normal,18:detailed
+
+View bundle:
+  hcom bundle cat bundle:xyz789
+```
+
+## Output Control
+
+<ParamField path="--quiet" type="boolean">
+  Suppress output (silent send)
+  
+  ```bash
+  hcom send @luna --quiet -- silent notification
+  ```
+</ParamField>
+
+## Examples
+
+### Basic Messaging
+
+```bash
+# Simple message
+hcom send @luna -- Hello
+
+# Multiple recipients
+hcom send @luna @nova @kira -- Team standup in 5min
+
+# Broadcast
+hcom send -- System restart scheduled
+
+# Pipe from command
+ls -la | hcom send @luna
+```
+
+### Request/Response Pattern
+
+```bash
+# Agent A: Send request
+hcom send @luna --intent request -- Can you check the logs?
+# Returns: Sent to: ▶ luna
+
+# Agent B (luna): Receives message, does work, replies
+hcom send @nova --intent ack --reply-to 42 -- Found the issue in auth.py line 123
+```
+
+### Thread Conversation
+
+```bash
+# Start thread
+hcom send @all --thread standup -- Daily standup starting
+
+# Reply in thread
+hcom send @all --thread standup -- Completed API refactor
+hcom send @all --thread standup -- Working on tests today
+
+# Reply-to creates implicit thread continuation
+hcom send @nova --reply-to 50 -- Great work on the refactor
+# (inherits thread from event #50)
+```
+
+### External Sender
+
+```bash
+# CI bot notifications
+hcom send @dev-team --from ci-bot --thread build-1234 -- Build passed, deploying to staging
+
+# System notifications
+hcom send @all --from system -- Maintenance window: 2am-4am
+
+# Script-triggered messages
+hcom send @on-call --from monitoring -- CPU usage > 90% on server-3
+```
+
+### Bundle Handoff
+
+```bash
+# Comprehensive context handoff
+hcom send @luna \
+  --title "Database Migration Context" \
+  --description "Completed schema changes for user table. Migration scripts tested locally. Need staging deployment." \
+  --events "200-215" \
+  --files "migrations/001_user_table.sql,src/models/user.py" \
+  --transcript "30-35:detailed" \
+  --intent request \
+  -- Ready for staging deployment. Full context in bundle.
+
+# Chain bundles (extend previous work)
+hcom send @nova \
+  --title "Staging Deployment Complete" \
+  --description "Deployed to staging. All tests passed. Production deploy approved." \
+  --events "220-225" \
+  --transcript "40-42:normal" \
+  --extends bundle:abc123 \
+  -- Staging verified. Proceeding to production.
+```
+
+## Exit Codes
+
+- **0** - Message sent successfully
+- **1** - Error (invalid arguments, validation failure, etc.)
+
+## Notes
+
+- All flags must come before `--` separator
+- With `--` separator, everything after is literal message text (no quotes needed)
+- Underscore blocks prefix matching: `@luna` matches `api-luna` but not `luna_old_1`
+- Request intent creates auto-subscription to track recipient status
+- Messages are delivered immediately and wake idle agents
+- Bundle creation validates refs and files before sending
+- Subagents inherit parent identity and cannot use `--from`

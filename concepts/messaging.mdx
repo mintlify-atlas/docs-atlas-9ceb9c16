@@ -1,0 +1,469 @@
+---
+title: Message Routing
+description: How messages are routed, delivered, and tracked in hcom
+---
+
+## Message Types
+
+hcom supports two message scopes:
+
+<CardGroup cols={2}>
+  <Card title="Broadcast" icon="tower-broadcast">
+    Sent to all active agents (no @mentions)
+  </Card>
+  <Card title="Mentions" icon="at">
+    Sent to specific agents via @mention or explicit targets
+  </Card>
+</CardGroup>
+
+## Message Structure
+
+Messages are stored as JSON events in the database:
+
+```json
+{
+  "from": "luna",
+  "text": "hey @nova can you help?",
+  "scope": "mentions",
+  "mentions": ["nova"],
+  "sender_kind": "instance",
+  "delivered_to": ["nova"],
+  "intent": "request",
+  "thread": "pr-123",
+  "reply_to": "42",
+  "bundle_id": "bundle:abc123"
+}
+```
+
+### Message Intents
+
+Intents provide semantic context:
+
+<Tabs>
+  <Tab title="request">
+    Expect a response from the recipient.
+    
+    ```bash
+    hcom send @nova --intent request -- can you review this?
+    ```
+    
+    Creates request-watch subscription to notify sender when recipient goes idle.
+  </Tab>
+  
+  <Tab title="inform">
+    FYI, no response needed.
+    
+    ```bash
+    hcom send @nova --intent inform -- build complete
+    ```
+    
+    No response tracking.
+  </Tab>
+  
+  <Tab title="ack">
+    Replying to a request.
+    
+    ```bash
+    hcom send @luna --intent ack --reply-to 42 -- done
+    ```
+    
+    Requires `--reply-to` with event ID.
+  </Tab>
+</Tabs>
+
+## Scope Computation
+
+### Target Matching
+
+Target matching uses 3-tier priority:
+
+1. **Full name prefix match** (with tag): `api-luna` matches `api-luna`
+2. **Tag prefix match**: `api-` matches all with tag `api`
+3. **Base name prefix match**: `luna` matches `api-luna`
+
+```rust
+// Example instances
+// - luna (no tag)
+// - api-luna (tag: api)
+// - api-nova (tag: api)
+
+@luna       → ["luna", "api-luna"]  // Matches both via base name
+@api-luna   → ["api-luna"]           // Exact full name
+@api-       → ["api-luna", "api-nova"] // Tag prefix
+```
+
+### Underscore Blocking
+
+Underscore prevents accidental prefix matches:
+
+```rust
+// Instances: luna, luna_reviewer_1
+
+@luna → ["luna"]  // Does NOT match luna_reviewer_1
+```
+
+### Cross-Device Matching
+
+Remote agents have device suffix:
+
+```rust
+// Local: luna
+// Remote: luna:BOXE (device ID: BOXE)
+
+@luna      → ["luna", "luna:BOXE"]  // Matches both
+@luna:BOXE → ["luna:BOXE"]          // Remote only
+```
+
+## Message Delivery
+
+### Delivery Flow
+
+<Steps>
+  <Step title="Send command">
+    User runs `hcom send @nova -- hello`
+  </Step>
+  <Step title="Scope computation">
+    Parse @mentions and resolve to instance names
+  </Step>
+  <Step title="Event insertion">
+    Insert message event into events table
+  </Step>
+  <Step title="Recipient wake">
+    Notify TCP endpoints for each delivered_to instance
+  </Step>
+  <Step title="Hook polling">
+    Recipient's hook polls for events > last_event_id
+  </Step>
+  <Step title="Filtering">
+    Hook filters messages by scope and mentions
+  </Step>
+  <Step title="Injection">
+    Hook injects formatted message into agent context
+  </Step>
+  <Step title="Cursor update">
+    Agent updates last_event_id after processing
+  </Step>
+</Steps>
+
+### Delivery Modes
+
+<Tabs>
+  <Tab title="TCP Push (PTY)">
+    PTY agents have delivery threads that listen on notify ports:
+    
+    ```rust
+    // Register notify endpoint
+    db.register_notify_port("luna", 50123);
+    
+    // Delivery thread polls and injects
+    loop {
+        let messages = db.get_unread_messages("luna");
+        if !messages.is_empty() {
+            inject_into_pty("luna", messages);
+        }
+        
+        // Wait for TCP wake or timeout
+        tcp_listener.accept().await;
+    }
+    ```
+    
+    Latency: < 100ms
+  </Tab>
+  
+  <Tab title="Hook Polling (Stop)">
+    Non-PTY agents poll on Stop/Poll hooks:
+    
+    ```rust
+    // Claude Stop hook
+    fn handle_stop_hook(payload: &HookPayload) -> HookResult {
+        let messages = db.get_unread_messages(name);
+        if !messages.is_empty() {
+            return HookResult::Block {
+                reason: format_messages_json(&messages, ...)
+            };
+        }
+        HookResult::Allow { ... }
+    }
+    ```
+    
+    Latency: depends on hook interval (30s for Claude)
+  </Tab>
+  
+  <Tab title="CLI Polling (listen)">
+    Vanilla/ad-hoc agents poll explicitly:
+    
+    ```bash
+    # Block until message arrives
+    hcom listen
+    
+    # Poll with timeout
+    hcom listen 60
+    
+    # Filter by sender
+    hcom listen --from luna
+    ```
+    
+    Latency: user-controlled
+  </Tab>
+</Tabs>
+
+### Filtering
+
+Messages are filtered during delivery:
+
+```rust
+pub fn should_deliver_message(
+    event_data: &Value,
+    receiver_name: &str,
+    sender_name: &str,
+) -> Result<bool, String> {
+    // Skip own messages
+    if receiver_name == sender_name {
+        return Ok(false);
+    }
+    
+    let scope = event_data.get("scope").and_then(|v| v.as_str())?;
+    
+    match scope {
+        "broadcast" => Ok(true),
+        "mentions" => {
+            let mentions = event_data.get("mentions").as_array()?;
+            
+            // Cross-device: strip device suffix for matching
+            let receiver_base = receiver_name.split(':').next();
+            Ok(mentions.iter().any(|m| {
+                receiver_base == m.split(':').next()
+            }))
+        }
+        _ => Ok(false),
+    }
+}
+```
+
+## Message Formatting
+
+### Hook Injection Format
+
+Messages injected into agent context:
+
+```rust
+let formatted = format_messages_json(&messages, "nova", ...);
+// Output:
+// <hcom>[request:pr-123 #42] luna → nova: can you review this?</hcom>
+```
+
+Format components:
+- **Envelope**: `[intent:thread #id]` or `[new message #id]`
+- **Sender**: Display name (with tag if set)
+- **Recipient**: Display name + others count
+- **Text**: Message content
+- **Hints**: Config hints appended
+
+### Multiple Messages
+
+Batch formatting:
+
+```rust
+// Single message: verbose
+[request #42] luna → nova (+2 others): first message
+
+// Multiple messages: compact
+[3 new messages] | [request #42] luna → nova (+1): msg1 | [inform #43] kira → nova: msg2 | [ack #44] mila → nova: msg3
+```
+
+### Remote Messages
+
+Remote events include device ID:
+
+```rust
+// Local event ID: #42
+// Remote event ID: #42:BOXE (device: BOXE)
+
+[request #42:BOXE] luna:BOXE → nova: hello from remote
+```
+
+## Read Receipts
+
+Track message delivery and read status:
+
+### Local Instances
+
+Read via deliver events:
+
+```rust
+// After message sent, deliver events logged
+let delivered = db.query(
+    "SELECT instance FROM events 
+     WHERE type='status' AND status_context='deliver:luna' 
+     AND id > ?",
+    [message_id]
+)?;
+
+// If deliver event exists after message → read
+```
+
+### Remote Instances
+
+Read via timestamp comparison:
+
+```rust
+// Message timestamp: 2024-01-01T12:00:00Z
+// Remote instance last_msg_ts: 2024-01-01T12:05:00Z
+
+if remote_msg_ts >= message_timestamp {
+    // Message read by remote instance
+}
+```
+
+### Read Receipt Display
+
+```bash
+hcom list -v
+
+# Output:
+Name   Status     Unread  Read receipts
+luna   listening  0       #42(2m): "hello" read by nova, kira [2/3]
+```
+
+## Request-Watch Subscriptions
+
+Automatic response tracking for `request` intent:
+
+```rust
+// When sending request
+if intent == "request" {
+    for recipient in delivered_to {
+        let (sub_key, sub_value) = build_request_watch_sub(
+            sender,
+            message_id,
+            recipient,
+            last_event_id,
+            now,
+        );
+        
+        // Subscribe to:
+        // - status=listening (recipient idle)
+        // - life_action=stopped (recipient ended)
+        db.kv_set(&sub_key, Some(&sub_value));
+    }
+}
+```
+
+When recipient goes idle or stops:
+
+```rust
+// Subscription fires → send notification
+let notification = format!(
+    "@{} {} is now {} (request #{})",
+    sender, recipient, status, request_id
+);
+
+db.log_event("message", "sys_[hcom-events]", &notification);
+```
+
+## Threading
+
+Group related messages:
+
+```bash
+# Start thread
+hcom send @nova --thread pr-123 -- can you review?
+
+# Reply in thread
+hcom send @luna --thread pr-123 --reply-to 42 -- looks good
+
+# Query thread
+hcom events --thread pr-123
+```
+
+Threads are purely organizational (no delivery impact).
+
+## Bundles
+
+Attach structured context to messages:
+
+```bash
+# Create bundle
+hcom bundle create "Review PR-123" \
+  --description "Frontend changes" \
+  --files src/app.tsx,tests/app.test.tsx \
+  --transcript 10-15:normal \
+  --events 100-120
+
+# Attach to message
+hcom send @nova --bundle bundle:abc123 -- please review
+```
+
+Bundles include:
+- Files (metadata + content)
+- Transcript ranges (with detail levels)
+- Event ranges (filtered log)
+- Chaining (extends previous bundle)
+
+## Validation
+
+### Message Validation
+
+```rust
+// Size check
+if message.len() > 100_000 {
+    return Err("Message too large");
+}
+
+// Control character check
+for ch in message.chars() {
+    if matches!(ch, '\x00'..='\x08' | '\x0B'..='\x0C' | '\x0E'..='\x1F') {
+        return Err("Control characters not allowed");
+    }
+}
+```
+
+### Scope Validation
+
+Strict failure on unknown targets:
+
+```rust
+let unmatched: Vec<String> = targets
+    .iter()
+    .filter(|t| !match_target(t, instances).is_empty())
+    .collect();
+
+if !unmatched.is_empty() {
+    return Err(format!(
+        "@mentions to non-existent agents: {}",
+        unmatched.join(", ")
+    ));
+}
+```
+
+### System Mention Protection
+
+```rust
+// Prevent @[hcom-events] mentions
+if message.contains("@[hcom-") {
+    return Err(
+        "System notifications cannot be mentioned"
+    );
+}
+```
+
+## Performance
+
+### Message Delivery Latency
+
+- **PTY agents**: < 100ms (TCP notify + injection)
+- **Polling agents**: 30s average (Claude hook interval)
+- **Cross-device**: < 500ms (MQTT publish + sync)
+
+### Throughput
+
+- **Events/sec**: 1000+ (SQLite WAL mode)
+- **Concurrent agents**: 50+ (tested)
+- **Message queue**: Unlimited (event log is append-only)
+
+### Optimization
+
+- **Indexes**: `(type, instance)`, `(timestamp)`, `(id)`
+- **FTS5**: Full-text search on message content
+- **Views**: `events_v` for JSON extraction caching
+- **Notify batching**: Single TCP wake per batch

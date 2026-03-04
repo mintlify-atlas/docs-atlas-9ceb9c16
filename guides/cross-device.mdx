@@ -1,0 +1,387 @@
+---
+title: 'Cross-Device Relay Setup'
+description: 'Sync agents across machines with MQTT relay'
+---
+
+Connect agents across multiple machines using hcom's MQTT relay. Agents on different devices see each other's messages, events, and state in real-time.
+
+## Quick Setup
+
+<Steps>
+
+### Create a relay group on the first device
+
+```bash
+hcom relay new
+```
+
+Output:
+```
+Relay group created.
+
+Token: hcom-relay://v01:YWJjZGVmZ2hpams...
+
+Share this token with other devices.
+Run on each device:
+  hcom relay connect <token>
+```
+
+### Connect other devices
+
+On each additional device:
+
+```bash
+hcom relay connect hcom-relay://v01:YWJjZGVmZ2hpams...
+```
+
+Output:
+```
+Connected to relay group.
+Broker: mqtts://broker.emqx.io:8883
+Device: XABC
+```
+
+### Verify sync
+
+On any device:
+
+```bash
+hcom list
+```
+
+You'll see agents from all connected devices. Remote agents have a device suffix:
+```
+▶ luna         (local)
+◉ nova:BOXE    (remote)
+```
+
+</Steps>
+
+## How It Works
+
+The relay uses MQTT pub/sub to sync:
+
+- **Instance state** - Registered agents, status, metadata
+- **Events** - Messages, file edits, commands, lifecycle
+- **Control signals** - Stop, kill commands
+
+Each device publishes to its own topic and subscribes to all others. The MQTT broker handles message routing.
+
+## Device Identity
+
+Each device gets a persistent UUID stored in `~/.hcom/.tmp/device_id`. The device short ID is derived from this UUID:
+
+```bash
+hcom relay
+```
+
+Output:
+```
+Relay Status
+  Configured: yes
+  Enabled: yes
+  Broker: mqtts://broker.emqx.io:8883
+  Device: XABC
+```
+
+Remote agent names include the device suffix:
+- `luna` (local agent)
+- `luna:BOXE` (luna on device BOXE)
+
+## Default Brokers
+
+hcom tries public MQTT brokers in order:
+
+1. `broker.emqx.io:8883` (TLS)
+2. `broker.hivemq.com:8883` (TLS)
+3. `test.mosquitto.org:8886` (TLS)
+
+The first successful connection is saved to config.
+
+<Note>
+Public brokers are fine for testing. For production, use a private broker (see Custom Broker below).
+</Note>
+
+## Relay Operations
+
+### Check Status
+
+```bash
+hcom relay
+```
+
+Output:
+```
+Relay Status
+  Configured: yes
+  Enabled: yes
+  Status: ok
+  Last push: 2s ago
+  Broker: mqtts://broker.emqx.io:8883
+  Device: XABC
+```
+
+### Enable/Disable Sync
+
+Temporarily disable without removing configuration:
+
+```bash
+hcom relay off
+hcom relay on
+```
+
+### Remove Relay Config
+
+Completely disconnect:
+
+```bash
+hcom config relay_id ""
+hcom config relay ""
+```
+
+## Relay Daemon
+
+For continuous syncing, run the relay daemon:
+
+```bash
+hcom relay daemon start
+```
+
+The daemon:
+- Runs in the background
+- Polls for remote updates every 2-5 seconds
+- Pushes local changes immediately
+- Survives terminal closure
+
+### Daemon Management
+
+```bash
+hcom relay daemon status    # Check if running
+hcom relay daemon stop      # Stop daemon
+hcom relay daemon restart   # Restart daemon
+```
+
+<Tip>
+Without the daemon, relay sync only happens during hcom commands. Start the daemon for continuous sync.
+</Tip>
+
+## Cross-Device Messaging
+
+Send messages to remote agents:
+
+```bash
+# Send to remote agent
+hcom send @luna:BOXE -- Check the logs on your machine
+
+# Send to all agents named luna (local + remote)
+hcom send @luna -- Status update
+```
+
+Remote agents see your messages instantly (within ~2 seconds).
+
+## Event Synchronization
+
+Events from remote devices appear in your event stream:
+
+```bash
+hcom events --last 20
+```
+
+Output:
+```json
+{"id":42,"ts":"2026-03-04T10:30:45","type":"message","instance":"luna:BOXE","data":{"from":"nova","text":"Done"}}
+{"id":43,"ts":"2026-03-04T10:31:12","type":"status","instance":"kira:BOXE","data":{"val":"listening"}}
+```
+
+Subscriptions work across devices:
+
+```bash
+hcom events sub --file '*.py'
+# Notified of Python file edits on any device
+```
+
+## Custom Broker
+
+Use a private MQTT broker:
+
+```bash
+hcom relay new --broker mqtts://my-broker.com:8883 --password mysecret
+```
+
+On other devices:
+```bash
+hcom relay connect <token> --password mysecret
+```
+
+Broker URL formats:
+- `mqtts://host:port` (TLS, recommended)
+- `mqtt://host:port` (plain TCP)
+- `host:port` (assumes TLS)
+
+## Security Considerations
+
+### Relay Tokens
+
+Tokens contain:
+- Relay group ID (UUID)
+- Broker URL
+- Optional password
+
+Keep tokens private. Anyone with the token can join your relay group.
+
+### Broker Security
+
+**Public brokers:**
+- No authentication
+- No encryption beyond TLS transport
+- Fine for non-sensitive testing
+
+**Private brokers:**
+- Use `--password` for authentication
+- Use TLS (mqtts://) for transport encryption
+- Recommended for production
+
+### Data Transmitted
+
+The relay syncs:
+- Agent names and metadata
+- Event data (messages, commands, file paths)
+- Control signals
+
+**NOT transmitted:**
+- File contents
+- Transcript text
+- Database state
+
+<Warning>
+Avoid sending sensitive data (credentials, keys) via hcom messages if using public brokers. Use private brokers with authentication for sensitive projects.
+</Warning>
+
+## Practical Examples
+
+### Remote Assistance
+
+```bash
+# On your laptop
+hcom relay new
+# Share token with coworker
+
+# Coworker connects from their desktop
+hcom relay connect <token>
+
+# You can now message their agents
+hcom send @debugger:BOXE -- Can you check the logs?
+```
+
+### Multi-Machine Build
+
+```bash
+# Device A: Frontend
+hcom claude -p "build frontend" --tag frontend
+
+# Device B: Backend
+hcom claude -p "build backend" --tag backend
+
+# Both see each other's progress
+hcom events --wait --sql "life_action='stopped'"
+```
+
+### Cross-Platform Testing
+
+```bash
+# Mac: Run tests
+hcom claude -p "pytest tests/" --tag mac-tests
+
+# Linux: Run tests
+hcom claude -p "pytest tests/" --tag linux-tests
+
+# Compare results
+hcom transcript @mac-tests-luna
+hcom transcript @linux-tests-nova:BOXE
+```
+
+## Troubleshooting
+
+### Connection Failed
+
+Check broker connectivity:
+
+```bash
+# Try different broker
+hcom relay new --broker mqtts://broker.hivemq.com:8883
+```
+
+Verify firewall allows outbound TLS (port 8883).
+
+### Agents Not Appearing
+
+Check relay status:
+
+```bash
+hcom relay
+```
+
+Ensure daemon is running:
+```bash
+hcom relay daemon status
+hcom relay daemon start
+```
+
+Trigger manual sync:
+```bash
+hcom relay push
+```
+
+### Stale Remote Agents
+
+Remote agents may linger if the other device disconnected uncleanly. They'll auto-expire after 5 minutes of inactivity.
+
+Force refresh:
+```bash
+hcom relay daemon restart
+```
+
+### High Latency
+
+Public brokers can be slow (2-10s). Use a private broker closer to your location:
+
+```bash
+hcom relay new --broker mqtts://my-broker.us-west.com:8883
+```
+
+### Duplicate Messages
+
+If you see duplicate events, stop the daemon on one device:
+
+```bash
+hcom relay daemon stop
+```
+
+Only one daemon should run per device.
+
+## Performance Notes
+
+- **Latency**: ~1-5s for public brokers, less than 1s for private
+- **Bandwidth**: Less than 1KB per event, compressed
+- **Polling**: Daemon polls every 2-5s when idle
+- **Instant push**: Local changes pushed immediately
+
+## Best Practices
+
+<Tip>
+- Use **private brokers** for production
+- Run **relay daemon** for continuous sync
+- Use **device-specific tags** to organize agents
+- Include **device suffix** in messages to remote agents
+- **Test tokens** before sharing with a team
+</Tip>
+
+<Warning>
+Public brokers have no authentication. Anyone with your relay group ID can potentially join. Use private brokers with --password for sensitive work.
+</Warning>
+
+## Next Steps
+
+- [Workflow automation](/guides/workflows)
+- [Event subscriptions](/guides/event-subscriptions)
+- [Sending messages](/guides/sending-messages)

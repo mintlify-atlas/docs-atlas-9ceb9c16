@@ -1,0 +1,384 @@
+---
+title: 'Reading Agent Transcripts'
+description: 'Access and analyze agent conversation history'
+---
+
+Read agent transcripts to understand what they've done, review their decisions, and share context between agents. Transcripts show the full conversation history with tool usage and file edits.
+
+## Basic Transcript Reading
+
+### View Recent Exchanges
+
+```bash
+hcom transcript @luna
+# Shows last 10 exchanges
+```
+
+Output:
+```
+#15
+  User: Fix the authentication bug
+  Action: I'll check the auth flow first...
+  Files: src/auth.py, src/middleware.py
+  Tools: Read(2), Edit(1)
+
+#16
+  User: Run the tests
+  Action: Running pytest...
+  Tools: Bash(1)
+```
+
+### Specific Exchange Range
+
+```bash
+hcom transcript @luna 5        # Just exchange #5
+hcom transcript @luna 5-10     # Exchanges 5 through 10
+hcom transcript @luna --range 5-10  # Flag form
+```
+
+### Limit Results
+
+```bash
+hcom transcript @luna --last 20
+# Shows last 20 exchanges
+```
+
+## Detail Levels
+
+### Normal (Default)
+
+Truncated output for overview:
+
+```bash
+hcom transcript @luna
+```
+
+Shows:
+- User prompts (truncated)
+- Agent responses (truncated)
+- File names
+- Tool counts
+
+### Full
+
+Complete text, no tool details:
+
+```bash
+hcom transcript @luna --full
+```
+
+Shows:
+- Complete user prompts
+- Complete agent responses
+- File names
+- Tool counts
+
+### Detailed
+
+Complete text + tool I/O:
+
+```bash
+hcom transcript @luna --detailed
+```
+
+Shows:
+- Complete user prompts
+- Complete agent responses
+- File names and tool names
+- Tool commands (Bash)
+- File paths (Edit, Read, Write)
+- Error indicators
+
+<Note>
+Use **--detailed** when debugging or analyzing specific tool behavior. Use **normal** for quick overviews.
+</Note>
+
+## JSON Output
+
+Machine-readable format:
+
+```bash
+hcom transcript @luna --json
+```
+
+Output:
+```json
+[
+  {
+    "position": 15,
+    "user": "Fix the authentication bug",
+    "action": "I'll check the auth flow first...",
+    "files": ["src/auth.py", "src/middleware.py"],
+    "timestamp": "2026-03-04T10:30:45Z",
+    "tools": [
+      {"name": "Read", "is_error": false},
+      {"name": "Edit", "is_error": false, "file": "src/auth.py"}
+    ]
+  }
+]
+```
+
+## Timeline View
+
+See all agents' activity chronologically:
+
+```bash
+hcom transcript timeline
+```
+
+Output:
+```
+2026-03-04 10:30:45 [luna]    #15: Fix the authentication bug
+2026-03-04 10:32:12 [nova]    #8:  Review the PR changes
+2026-03-04 10:33:01 [luna]    #16: Run the tests
+```
+
+With details:
+```bash
+hcom transcript timeline --full --last 20
+```
+
+## Search Transcripts
+
+Search across all agent transcripts:
+
+```bash
+hcom transcript search "authentication"
+```
+
+Output:
+```
+src/auth.py:42: def authenticate_user(username, password):
+luna #15: Fix the authentication bug
+nova #23: Review authentication flow
+```
+
+### Search Options
+
+```bash
+# Live agents only
+hcom transcript search "pytest" --live
+
+# All transcripts (including stopped agents)
+hcom transcript search "database" --all
+
+# Filter by agent type
+hcom transcript search "build" --agent claude
+
+# Limit results
+hcom transcript search "error" --limit 10
+
+# Exclude your own transcript
+hcom transcript search "test" --exclude-self
+```
+
+## Transcript Sharing
+
+Share transcript ranges with other agents:
+
+### Reference in Messages
+
+```bash
+hcom send @nova -- Read my transcript range 5-10 for context on the auth bug
+```
+
+### Bundle with Context
+
+```bash
+hcom send @nova \
+  --transcript "10-15:detailed" \
+  --description "Auth bug context" \
+  -- Review my approach and suggest improvements
+```
+
+See [Creating Context Bundles](/guides/bundles) for more.
+
+## Understanding Transcript Structure
+
+### Exchanges
+
+Each exchange consists of:
+1. **User prompt** - What you asked the agent to do
+2. **Agent action** - The agent's response and reasoning
+3. **Tools used** - Which tools the agent called
+4. **Files touched** - Files read, edited, or written
+5. **Errors** - Any tool errors or failures
+
+### Exchange Numbers
+
+Exchange numbers are sequential starting from 1:
+
+```bash
+hcom transcript @luna
+# #1, #2, #3, ...
+```
+
+Use ranges for specific periods of work:
+```bash
+hcom transcript @luna 10-15
+# Shows exchanges during that work session
+```
+
+### Timestamps
+
+Each exchange has a timestamp:
+
+```
+#15 @ 2026-03-04T10:30:45Z
+```
+
+Use timestamps to correlate with events:
+```bash
+hcom events --after 2026-03-04T10:30:00
+```
+
+## Tool Usage in Transcripts
+
+Transcripts show which tools were used:
+
+```
+Tools: Bash(3), Read(5), Edit(2)
+```
+
+**--detailed** shows more:
+```
+Tools:
+  Bash: pytest tests/
+  Bash: git status
+  Read: src/auth.py
+  Edit: src/auth.py:42 (success)
+```
+
+Error indicators:
+```
+Tools:
+  Bash: npm install (ERROR)
+  Edit: src/db.py:123 (ERROR)
+```
+
+## Practical Examples
+
+### Review Work Session
+
+```bash
+hcom transcript @luna --range 20-30 --detailed
+# See exactly what luna did in exchanges 20-30
+```
+
+### Debug Errors
+
+```bash
+hcom transcript search "ERROR" --agent luna --limit 5
+# Find recent errors in luna's transcript
+```
+
+### Compare Approaches
+
+```bash
+hcom transcript @luna --range 10-12 --json > luna.json
+hcom transcript @nova --range 15-17 --json > nova.json
+diff luna.json nova.json
+```
+
+### Share Context
+
+```bash
+hcom send @reviewer \
+  --transcript "20-25:full" \
+  --title "Code Review Context" \
+  --description "My implementation of the auth fix" \
+  -- Please review this approach
+```
+
+## Agent-Specific Transcript Formats
+
+hcom reads transcripts from:
+- **Claude Code**: `~/.claude/projects/*/transcript.jsonl`
+- **Gemini CLI**: `~/.gemini/transcript.json`
+- **Codex CLI**: `~/.codex/transcript.jsonl`
+- **OpenCode**: `~/.config/opencode/opencode.db`
+
+All formats are normalized to the same structure.
+
+## Transcript Lifecycle
+
+### Active Sessions
+
+Transcripts update in real-time:
+
+```bash
+hcom transcript @luna
+# Shows all exchanges up to now
+```
+
+### Stopped Agents
+
+Transcripts remain readable:
+
+```bash
+hcom stop luna
+hcom transcript @luna
+# Still accessible
+```
+
+### Archived Sessions
+
+After `hcom reset`, transcripts move to archive:
+
+```bash
+hcom archive           # List archives
+hcom archive 1 agents  # Show archived agent names
+```
+
+## Troubleshooting
+
+### Transcript Not Found
+
+Check if agent is registered:
+
+```bash
+hcom list
+```
+
+Verify transcript path:
+```bash
+hcom list luna --json | jq .transcript_path
+```
+
+### Exchange Numbers Don't Match
+
+Exchange numbers are per-session. After resume/fork:
+
+```bash
+hcom r luna
+# Continues from where it left off
+```
+
+### Large Transcripts
+
+Use ranges to avoid loading everything:
+
+```bash
+hcom transcript @luna --last 20  # Last 20 only
+hcom transcript @luna 100-110    # Specific range
+```
+
+## Best Practices
+
+<Tip>
+- Use **normal** detail for quick scans
+- Use **--full** when sharing context
+- Use **--detailed** for debugging tool issues
+- Use **--json** for programmatic analysis
+- Reference ranges instead of copying full text
+</Tip>
+
+<Warning>
+Transcripts can contain sensitive data (API keys, credentials) if agents used them. Be careful when sharing transcript excerpts.
+</Warning>
+
+## Next Steps
+
+- [Create context bundles](/guides/bundles)
+- [Subscribe to events](/guides/event-subscriptions)
+- [Workflow automation](/guides/workflows)

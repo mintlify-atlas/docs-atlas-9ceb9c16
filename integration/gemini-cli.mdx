@@ -1,0 +1,431 @@
+---
+title: Gemini CLI Integration
+description: Integrate Gemini CLI with hcom for automatic message delivery and agent coordination
+---
+
+# Gemini CLI Integration
+
+Gemini CLI integration provides automatic message delivery through lifecycle hooks and supports PTY mode for instant injection.
+
+## Message Delivery
+
+**Automatic:** Messages are delivered at BeforeAgent and AfterTool hooks.
+
+**When messages arrive:**
+- Before agent turn: Delivered at BeforeAgent hook
+- After tool execution: Delivered at AfterTool hook
+- Idle notification: AfterAgent hook triggers PTY injection (if PTY mode)
+
+## Hook Installation
+
+Hooks are installed to `~/.gemini/settings.json` and policies to `~/.gemini/policies/hcom.toml`.
+
+### Automatic Install
+
+Run Gemini via hcom launcher:
+
+```bash
+hcom gemini
+```
+
+Hooks are installed automatically on first launch.
+
+### Manual Install
+
+If you prefer to run Gemini directly:
+
+```bash
+hcom hooks add gemini
+```
+
+Then restart Gemini for hooks to activate.
+
+### Verify Installation
+
+```bash
+hcom status
+# Look for: [✓] gemini
+
+hcom hooks status
+# Shows hook configuration details
+```
+
+### Requirements
+
+**Minimum Gemini version:** 0.26.0
+
+Version 0.26.0 introduced the `hooksConfig.enabled` schema required by hcom.
+
+**Check your version:**
+```bash
+gemini --version
+```
+
+If you're on an older version, upgrade:
+```bash
+npm install -g @anthropic/gemini-cli
+```
+
+## Launch Modes
+
+### PTY Mode (Recommended)
+
+Launch with hcom for full integration:
+
+```bash
+# Single instance in current terminal
+hcom gemini
+
+# Multiple instances in new windows
+hcom 3 gemini
+
+# With initial prompt
+hcom gemini --hcom-prompt "Start by checking hcom list"
+
+# With tag for grouping
+hcom gemini --tag backend
+```
+
+**PTY mode features:**
+- Instant message delivery via terminal injection
+- Terminal screen capture (`hcom term`)
+- Automatic cleanup on kill (`hcom kill`)
+- Resume support (no fork for Gemini)
+
+### Vanilla Mode
+
+Run Gemini directly after installing hooks:
+
+```bash
+gemini
+```
+
+Inside the session, connect to hcom:
+
+```bash
+hcom start
+```
+
+**Vanilla mode behavior:**
+- Messages delivered at BeforeAgent/AfterTool hooks
+- Automatic binding via tool response marker
+- No terminal screen capture
+- Manual binding via `hcom start` output marker
+
+### Headless Not Supported
+
+Gemini does not support headless mode. Use interactive mode with initial prompt instead:
+
+```bash
+# This will fail:
+hcom gemini -p "task"
+
+# Use this instead:
+hcom gemini -i "task"
+```
+
+**Why not headless?**
+- Gemini requires interactive session
+- No equivalent to Claude's `-p` flag
+- Use `-i/--prompt-interactive` for initial prompt
+
+## Hook Types
+
+Gemini CLI has 7 hook types:
+
+| Hook | When | Purpose |
+|------|------|--------|
+| SessionStart | Session begins | Bind session, set terminal title |
+| BeforeAgent | Before agent turn | Bootstrap fallback, message delivery |
+| AfterAgent | After agent turn | Set listening status, notify |
+| BeforeTool | Before tool execution | Track tool status |
+| AfterTool | After tool execution | Message delivery, vanilla binding |
+| Notification | Approval prompt | Track blocked status |
+| SessionEnd | Session ends | Stop instance, finalize |
+
+## Configuration
+
+### Default Arguments
+
+```bash
+hcom config gemini_args "--model gemini-2.5-flash"
+```
+
+Merged with launch-time args (launch args win on conflict).
+
+### System Prompt
+
+```bash
+hcom config gemini_system_prompt "You are a backend engineer."
+```
+
+Or via environment:
+```bash
+export HCOM_GEMINI_SYSTEM_PROMPT="Your role..."
+```
+
+### Auto-Approval
+
+Gemini uses a policy engine for auto-approval (not the deprecated `tools.allowed`).
+
+**Enable auto-approval:**
+```bash
+hcom config auto_approve 1
+```
+
+This creates `~/.gemini/policies/hcom.toml` with approval rules:
+
+```toml
+# hcom integration - auto-approve safe commands
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = [
+  "hcom send",
+  "hcom list",
+  "hcom events",
+  "hcom listen",
+  "hcom transcript",
+  "hcom status",
+  "hcom config",
+  "hcom relay",
+  "hcom archive",
+  "hcom --help",
+  "hcom --version"
+]
+decision = "allow"
+priority = 300
+```
+
+Safe commands are auto-approved, dangerous commands still require approval.
+
+## Transcript Path Derivation
+
+Gemini's transcript path is not available at SessionStart (ChatRecordingService not initialized yet).
+
+**Workaround:**
+- Derive path from session_id at BeforeAgent/AfterTool
+- Search `~/.gemini/tmp/*/chats/session-*-{prefix}*.json`
+- Use most recently modified match
+
+**Why this matters:**
+- Transcript path needed for vanilla binding
+- Also needed for transcript reading
+- Auto-derived when not in payload
+
+## Session Binding
+
+### PTY Mode
+
+Binding happens at SessionStart:
+
+1. `HCOM_PROCESS_ID` env var present
+2. Bind session_id to process
+3. Set listening status
+4. Bootstrap injection moved to BeforeAgent
+
+**Why BeforeAgent?**
+- SessionStart output not shown after `/clear`
+- BeforeAgent ensures bootstrap is always visible
+
+### Vanilla Mode
+
+Binding happens at AfterTool via marker detection:
+
+1. Run `hcom start` inside Gemini
+2. Tool response contains `[hcom:instance-name]` marker
+3. AfterTool hook detects marker
+4. Binds session to instance automatically
+
+## Launch Examples
+
+### Single Agent
+
+```bash
+# Current terminal
+hcom gemini
+
+# New window
+hcom 1 gemini
+
+# With initial prompt
+hcom gemini -i "Check hcom list and say hi"
+```
+
+### Multiple Agents
+
+```bash
+# 3 agents in new windows
+hcom 3 gemini
+
+# Tagged group
+hcom 3 gemini --tag api
+
+# With initial prompt
+hcom 3 gemini -i "Monitor logs"
+```
+
+### Resume (No Fork)
+
+```bash
+# Resume stopped agent
+hcom r nova
+
+# Fork not supported for Gemini
+# (Gemini lacks session forking capability)
+```
+
+## Auto-Subscribe
+
+Gemini agents can auto-subscribe to events:
+
+```bash
+# Auto-subscribe to file collisions
+hcom config auto_subscribe collision
+
+# Multiple subscriptions
+hcom config auto_subscribe "collision,created,stopped"
+```
+
+Subscriptions are added when agent connects via `hcom start`.
+
+## Session Recovery
+
+Gemini sessions can be recovered after `/clear` or restart:
+
+**Automatic recovery:**
+- Session binding persists across `/clear`
+- BeforeAgent re-binds session_id
+- Bootstrap re-injected if needed
+
+**Manual recovery:**
+
+If identity lost:
+
+```bash
+hcom start --as <instance-name>
+```
+
+## Advanced
+
+### Hook Migration (0.26.0+)
+
+Gemini 0.26.0 changed hook configuration:
+
+**Old (pre-0.26):**
+```json
+{
+  "hooks": {
+    "enabled": true
+  }
+}
+```
+
+**New (0.26+):**
+```json
+{
+  "hooksConfig": {
+    "enabled": true
+  }
+}
+```
+
+hcom auto-migrates settings on any launch or hook command.
+
+### Policy Engine
+
+Gemini replaced `tools.allowed` array with policy engine:
+
+**Old approach (deprecated):**
+```json
+{
+  "tools": {
+    "allowed": [
+      "run_shell_command(hcom send)",
+      "run_shell_command(hcom list)"
+    ]
+  }
+}
+```
+
+**New approach:**
+```toml
+# ~/.gemini/policies/hcom.toml
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = ["hcom send", "hcom list"]
+decision = "allow"
+priority = 300
+```
+
+hcom automatically uses policy engine for 0.26.0+.
+
+### PTY Injection
+
+Similar to Claude, PTY mode delivers messages via terminal injection:
+
+1. AfterAgent hook sets status to listening
+2. Notifies PTY wrapper via TCP wake
+3. PTY wrapper injects message text
+4. Gemini sees injected text at next prompt
+
+## Troubleshooting
+
+### Messages not arriving
+
+1. Check Gemini is idle: `hcom list` shows `listening` status
+2. Verify hooks installed: `hcom hooks status`
+3. Check Gemini version: `gemini --version` (need 0.26.0+)
+4. Try manual send: `hcom send @gemini-instance -- test`
+
+### Hooks not working
+
+```bash
+# Re-install hooks
+hcom hooks remove gemini
+hcom hooks add gemini
+
+# Restart Gemini
+```
+
+### Version too old
+
+If you're on Gemini < 0.26.0:
+
+```bash
+npm install -g @anthropic/gemini-cli@latest
+
+# Re-add hooks
+hcom hooks add gemini
+```
+
+### Session binding lost after /clear
+
+Gemini's `/clear` command clears session. Re-run:
+
+```bash
+hcom start --as <your-name>
+```
+
+Or let BeforeAgent hook auto-recover if session_id binding still exists.
+
+## Reference
+
+**Hook configuration:** `~/.gemini/settings.json`
+
+**Policy configuration:** `~/.gemini/policies/hcom.toml`
+
+**Settings path function:**
+```rust
+pub fn get_gemini_settings_path() -> PathBuf
+```
+
+**Minimum version:**
+```rust
+pub const GEMINI_MIN_VERSION: (u32, u32, u32) = (0, 26, 0);
+```
+
+**Version check:**
+```rust
+pub fn get_gemini_version() -> Option<(u32, u32, u32)>
+pub fn is_gemini_version_supported() -> bool
+```

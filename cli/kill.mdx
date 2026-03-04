@@ -1,0 +1,265 @@
+---
+title: 'hcom kill'
+description: 'Terminate agent processes'
+---
+
+## Overview
+
+Send SIGTERM to agent process groups and close terminal panes. More forceful than `hcom stop`.
+
+## Syntax
+
+```bash
+hcom kill <TARGETS>
+```
+
+<ParamField path="TARGETS" type="string[]" required>
+  Agents to kill (names, PIDs, `tag:X`, or `all`)
+  
+  At least one target required
+</ParamField>
+
+## Special Targets
+
+<ParamField path="all" type="keyword">
+  Kill all instances with tracked PIDs
+  
+  Includes active instances and orphaned processes
+  
+  ```bash
+  hcom kill all
+  ```
+</ParamField>
+
+<ParamField path="tag:<name>" type="keyword">
+  Kill all instances and orphans with specific tag
+  
+  ```bash
+  hcom kill tag:experiment-1
+  ```
+</ParamField>
+
+## Behavior
+
+### Kill Sequence
+
+1. **Send SIGTERM** to process group
+2. **Wait 2 seconds**
+3. **Send SIGKILL** if still alive
+4. **Close terminal pane** (if managed terminal)
+5. **Log stopped event** with reason=killed
+6. **Delete instance row** from database
+
+### Terminal Pane Closing
+
+Managed terminals (kitty, wezterm, tmux) have their panes automatically closed:
+
+- **Kitty**: `kitty @ close-window --match id:<pane-id>`
+- **Wezterm**: `wezterm cli kill-pane --pane-id <pane-id>`
+- **Tmux**: `tmux kill-pane -t <pane-id>`
+
+Other terminals (iTerm, Terminal.app, etc.) only receive SIGTERM.
+
+### Orphan Handling
+
+Kill also terminates orphaned processes (stopped but still running):
+
+```bash
+hcom kill all
+# Kills active instances + orphans from pidtrack
+```
+
+## Examples
+
+### Kill Single Agent
+
+```bash
+hcom kill luna
+# Output:
+# Sent SIGTERM to process group 12345 for 'luna' (closed kitty pane 123)
+#   To resume: hcom r luna
+```
+
+### Kill Multiple Agents
+
+```bash
+hcom kill luna nova kira
+# Kills all three in sequence
+```
+
+### Kill by Tag
+
+```bash
+hcom kill tag:dev
+# Output:
+# Sent SIGTERM to process group 12345 for 'dev-luna' (closed kitty pane 123)
+# Sent SIGTERM to process group 12346 for 'dev-nova' (closed kitty pane 124)
+# Sent SIGTERM to process group 12347 for 'dev-kira' (closed kitty pane 125)
+# Killed 3 (tag:dev)
+```
+
+### Kill All
+
+```bash
+hcom kill all
+# Output:
+# Sent SIGTERM to process group 12345 for 'luna' (closed kitty pane 123)
+# Sent SIGTERM to process group 12346 for 'nova' (closed wezterm pane wt-456)
+# Process group 12347 not found for 'kira' (already terminated)
+# Sent SIGTERM to orphan process group 12348 (apollo, closed kitty pane 789)
+# Killed 4
+```
+
+### Kill by PID
+
+```bash
+hcom kill 12345
+# Looks up orphan by PID and kills it
+```
+
+### Kill Headless Agent
+
+```bash
+hcom kill headless-agent
+# Output:
+# Sent SIGTERM to process group 12350 for 'headless-agent'
+#   To resume: hcom r headless-agent
+# (No pane close — headless has no terminal window)
+```
+
+### Permission Denied
+
+```bash
+hcom kill other-users-agent
+# Output:
+# Permission denied to kill process group 99999 for 'other-users-agent'
+# Exit code: 1
+```
+
+### Already Dead
+
+```bash
+hcom kill zombie-agent
+# Output:
+# Process group 12360 not found for 'zombie-agent' (already terminated)
+#   To resume: hcom r zombie-agent
+```
+
+### Kill Stopped Orphan
+
+```bash
+# Agent was stopped but process still running
+hcom kill tag:orphan
+# Output:
+# Sent SIGTERM to stopped process group 12370 for 'orphan-luna' (closed kitty pane 999)
+# Killed 1 (tag:orphan)
+```
+
+## Output Patterns
+
+### Successful Kill
+
+```
+Sent SIGTERM to process group <PID> for '<name>' (closed <terminal> pane <id>)
+  To resume: hcom r <name>
+```
+
+### Already Dead
+
+```
+Process group <PID> not found for '<name>' (already terminated) (closed <terminal> pane <id>)
+  To resume: hcom r <name>
+```
+
+### Permission Denied
+
+```
+Permission denied to kill process group <PID> for '<name>'
+```
+
+### No Tracked PID
+
+```
+No tracked PID for '<name>' — use 'hcom stop <name>' instead
+```
+
+### Pane Close Failed
+
+```
+Sent SIGTERM to process group <PID> for '<name>' (pane close failed for kitty)
+```
+
+## Exit Codes
+
+<ResponseField name="0" type="success">
+  All targets killed successfully (or already dead)
+</ResponseField>
+
+<ResponseField name="1" type="error">
+  - No targets specified
+  - Target not found
+  - Permission denied
+  - No tracked PID (use `hcom stop` instead)
+</ResponseField>
+
+## Notes
+
+<Note>
+  **SIGTERM → SIGKILL**: Kill sends SIGTERM to the process group. After 2 seconds, sends SIGKILL to ensure termination. More forceful than `hcom stop`.
+</Note>
+
+<Note>
+  **Process Groups**: Kill targets the entire process group (-PID), ensuring child processes are terminated too.
+</Note>
+
+<Note>
+  **Orphan Cleanup**: `kill all` and `kill tag:*` include orphaned processes from pidtrack. These are stopped agents whose processes are still running.
+</Note>
+
+<Note>
+  **Pane Closing**: Only works for managed terminals (kitty, wezterm, tmux). Other terminals receive SIGTERM only.
+</Note>
+
+<Note>
+  **Resume Preserved**: Kill logs a `life.stopped` event with reason=killed. Agent can be resumed with `hcom r <name>`.
+</Note>
+
+<Note>
+  **No Tracked PID**: Agents without tracked PIDs cannot be killed. Use `hcom stop <name>` for graceful disconnect instead.
+</Note>
+
+<Note>
+  **Remote Instances**: Cannot kill remote instances (from other devices). Those are managed on their origin device.
+</Note>
+
+<Note>
+  **Headless Agents**: Headless instances have no terminal pane, so kill only sends SIGTERM/SIGKILL without pane close.
+</Note>
+
+## Kill vs Stop
+
+| Feature | `hcom kill` | `hcom stop` |
+|---------|-------------|-------------|
+| Signal | SIGTERM → SIGKILL (2s) | TCP notify (interactive) or SIGTERM (headless) |
+| Force | Yes | Graceful |
+| Pane close | Yes (managed terminals) | No |
+| Orphans | Includes orphans | Active only |
+| Speed | Immediate | Waits for tool |
+| Resume | Yes | Yes |
+
+Use `kill` when:
+- Agent is unresponsive
+- Need to free terminal pane immediately
+- Cleaning up orphaned processes
+
+Use `stop` when:
+- Agent is responsive
+- Want graceful shutdown
+- Inside AI tool (self-stop)
+
+## Related Commands
+
+- [`hcom stop`](/cli/stop) - Graceful disconnect
+- [`hcom r`](/cli/resume) - Resume killed agents
+- [`hcom list`](/cli/list) - View active agents
+- [`hcom status`](/cli/status) - Check for orphaned processes

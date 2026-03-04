@@ -1,0 +1,321 @@
+---
+title: 'Running Tasks in Parallel'
+description: 'Execute independent tasks concurrently with multiple agents'
+---
+
+## Overview
+
+Launch multiple agents to work on independent tasks simultaneously, then collect results when complete.
+
+## Basic Pattern
+
+<Steps>
+  <Step title="Launch agents with tasks">
+    Spawn N agents, each with a specific task in their initial prompt.
+  </Step>
+  <Step title="Agents work independently">
+    Each agent completes their task without coordination.
+  </Step>
+  <Step title="Collect results">
+    Wait for completion messages or query status.
+  </Step>
+</Steps>
+
+## Example: Parallel File Processing
+
+### Launch Workers
+
+```bash
+# Process 3 modules in parallel
+hcom 1 claude --tag worker --go --headless \
+  --hcom-prompt "Analyze src/auth module. Count functions, check test coverage. \
+  Send results to @coordinator via hcom."
+
+hcom 1 claude --tag worker --go --headless \
+  --hcom-prompt "Analyze src/api module. Count functions, check test coverage. \
+  Send results to @coordinator via hcom."
+
+hcom 1 claude --tag worker --go --headless \
+  --hcom-prompt "Analyze src/db module. Count functions, check test coverage. \
+  Send results to @coordinator via hcom."
+```
+
+### Collect Results
+
+```bash
+# From coordinator or your agent:
+hcom listen --timeout 120 --from worker-
+# Wait for all 3 workers to report
+```
+
+## Batch Launch
+
+Launch multiple agents with one command:
+
+```bash
+hcom 5 claude --tag worker --go --headless \
+  --hcom-system-prompt "You process tasks sent via hcom. \
+  When you receive a task, complete it and send results to sender."
+```
+
+Then distribute tasks:
+
+```bash
+hcom send '@worker- Analyze src/auth' --intent request
+hcom send '@worker- Analyze src/api' --intent request  
+hcom send '@worker- Analyze src/db' --intent request
+hcom send '@worker- Analyze src/utils' --intent request
+hcom send '@worker- Analyze src/models' --intent request
+```
+
+## Example: Parallel Testing
+
+Run different test suites simultaneously:
+
+```bash
+# Unit tests
+hcom 1 claude --tag tests --go --headless \
+  --hcom-prompt "Run: pytest tests/unit -v. Send results to @tester."
+
+# Integration tests
+hcom 1 claude --tag tests --go --headless \
+  --hcom-prompt "Run: pytest tests/integration -v. Send results to @tester."
+
+# E2E tests  
+hcom 1 claude --tag tests --go --headless \
+  --hcom-prompt "Run: pytest tests/e2e -v. Send results to @tester."
+```
+
+Wait for all:
+
+```bash
+hcom events --wait 300 --agent tests- --type message
+```
+
+## Worker Pool Pattern
+
+Create a reusable worker pool:
+
+### Launch Pool
+
+```bash
+# Launch 5 generic workers
+hcom 5 claude --tag pool --go --headless \
+  --hcom-system-prompt "You are a worker in a task pool. \
+  Listen for tasks via hcom, execute them, send results back to requester. \
+  After completing a task, wait for next task."
+```
+
+### Task Dispatcher
+
+Create a coordinator that distributes tasks:
+
+```bash
+hcom 1 claude --tag dispatcher --go --hcom-prompt "
+1. Read task list from tasks.json
+
+2. For each task:
+   - Find idle worker: hcom events --idle pool- --last 1
+   - Send task: hcom send '@pool-<name> [task details]' --intent request
+   - Track assignment
+
+3. Wait for completion:
+   - hcom listen --timeout 60
+   - Mark task complete
+   - Continue to next task
+
+4. When all tasks complete, send summary
+"
+```
+
+## Example Script
+
+Create `~/.hcom/scripts/parallel.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Run tasks in parallel
+set -euo pipefail
+
+tasks=("$@")
+if [[ ${#tasks[@]} -eq 0 ]]; then
+  echo "Usage: hcom run parallel 'task1' 'task2' 'task3'"
+  exit 1
+fi
+
+thread="parallel-$(date +%s)"
+LAUNCHED_NAMES=()
+
+# Cleanup on error
+cleanup() {
+  for name in "${LAUNCHED_NAMES[@]}"; do
+    hcom stop "$name" --go 2>/dev/null || true
+  done
+}
+trap cleanup ERR
+
+# Launch worker for each task
+for i in "${!tasks[@]}"; do
+  task="${tasks[$i]}"
+  echo "Launching worker $((i+1)) for: $task"
+  
+  output=$(hcom 1 claude --tag worker --go --headless \
+    --hcom-prompt "Task: ${task}
+    
+    Complete this task and send results:
+    hcom send '@coordinator TASK $((i+1)) COMPLETE: [results]' \
+      --thread ${thread}" 2>&1)
+  
+  # Track launched agents
+  names=$(echo "$output" | grep '^Names: ' | sed 's/^Names: //')
+  for n in $names; do LAUNCHED_NAMES+=("$n"); done
+done
+
+echo "Launched ${#tasks[@]} workers in thread ${thread}"
+echo "Waiting for completion..."
+
+# Wait for all tasks
+for i in "${!tasks[@]}"; do
+  hcom events --wait 300 --thread "${thread}" \
+    --sql "msg_text LIKE '%TASK $((i+1)) COMPLETE%'" >/dev/null
+  echo "Task $((i+1)) complete"
+done
+
+echo "All tasks complete!"
+
+# Query results
+hcom events --thread "${thread}" --type message --last "${#tasks[@]}"
+
+# Cleanup
+for name in "${LAUNCHED_NAMES[@]}"; do
+  hcom stop "$name" --go 2>/dev/null || true
+done
+
+trap - ERR
+```
+
+Usage:
+
+```bash
+hcom run parallel \
+  'Analyze src/auth' \
+  'Analyze src/api' \
+  'Run tests' \
+  'Check dependencies' \
+  'Generate docs'
+```
+
+## Race Condition Example
+
+Find the fastest solution:
+
+```bash
+thread="race-$(date +%s)"
+
+# Launch 3 agents to solve the same problem
+for i in {1..3}; do
+  hcom 1 claude --tag racer --go --headless \
+    --hcom-prompt "Solve: [problem]. \
+    Send solution to thread ${thread} ASAP. \
+    First correct solution wins."
+done
+
+# Take first response
+hcom events --wait 180 --thread "${thread}" --type message --last 1
+```
+
+## Monitoring Progress
+
+### Check worker status
+
+```bash
+hcom list | grep worker-
+```
+
+### Watch for completion
+
+```bash
+watch -n 2 'hcom events --agent worker- --type message --last 10'
+```
+
+### Query specific worker
+
+```bash
+hcom transcript worker-luna --last 3
+```
+
+## Load Balancing
+
+Distribute tasks to least-busy workers:
+
+```bash
+# Find idle worker
+idle_worker=$(hcom list --json | \
+  python3 -c "import sys,json; \
+  workers=[a for a in json.load(sys.stdin)['agents'] \
+           if a['name'].startswith('worker-') and a['status']=='listening']; \
+  print(workers[0]['name'] if workers else '')")
+
+if [[ -n "$idle_worker" ]]; then
+  hcom send "@${idle_worker} [task]" --intent request
+else
+  echo "No idle workers"
+fi
+```
+
+## Tips
+
+<Tip>
+  Use `--thread` to group parallel task messages for easy querying.
+</Tip>
+
+<Tip>
+  Set reasonable timeouts. Independent tasks may complete at different speeds.
+</Tip>
+
+<Tip>
+  Launch with `--headless` for background execution without terminal clutter.
+</Tip>
+
+<Warning>
+  Don't launch too many agents at once. Start with 3-5 and scale up if needed.
+</Warning>
+
+## Troubleshooting
+
+### Worker stuck
+
+Check status and recent activity:
+
+```bash
+hcom list worker-luna
+hcom events --agent worker-luna --last 5
+```
+
+Restart if needed:
+
+```bash
+hcom stop worker-luna --go
+hcom 1 claude --tag worker --go --headless --hcom-prompt "[retry task]"
+```
+
+### Task timeout
+
+Increase timeout or check worker:
+
+```bash
+# Check if worker is blocked
+hcom events --blocked worker-luna
+
+# Check recent transcript
+hcom transcript worker-luna --last 3 --detailed
+```
+
+### Lost results
+
+Query thread or agent messages:
+
+```bash
+hcom events --thread parallel-123 --type message
+hcom events --from worker- --type message --last 20
+```

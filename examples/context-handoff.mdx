@@ -1,0 +1,369 @@
+---
+title: 'Context Handoff Between Agents'
+description: 'Transfer knowledge and state between agents using bundles'
+---
+
+## Overview
+
+Context handoff allows one agent to transfer their knowledge, decisions, and state to another agent. This is essential for:
+
+- Shift changes (agent A stops, agent B continues)
+- Specialization (frontend agent hands off to backend agent)
+- Escalation (junior agent stuck, senior agent takes over)
+- Collaboration (multiple agents working on related tasks)
+
+## Methods
+
+<CardGroup cols={3}>
+  <Card title="Bundles" icon="box">
+    Structured context packages with files, transcript, and events.
+  </Card>
+  <Card title="Messages" icon="message">
+    Direct communication with summaries and instructions.
+  </Card>
+  <Card title="Transcripts" icon="scroll">
+    Read another agent's conversation history.
+  </Card>
+</CardGroup>
+
+## Bundle Handoff
+
+Bundles are the recommended method for comprehensive context transfer.
+
+### Create Bundle
+
+```bash
+hcom bundle create "Auth refactor - handoff to backend team" \
+  --description "Completed frontend auth UI. Backend needs to implement JWT endpoints. \
+  Key decisions: using httpOnly cookies, 7-day refresh tokens, remember-me checkbox. \
+  Next: implement POST /auth/login, POST /auth/refresh, POST /auth/logout." \
+  --files src/components/Login.tsx,src/api/auth.ts,src/types/auth.ts \
+  --transcript 10-25:detailed \
+  --events 50-75
+```
+
+### Send Bundle
+
+```bash
+hcom send '@backend-team Taking over auth. Context attached.' \
+  --title "Auth refactor - handoff to backend team" \
+  --description "Frontend complete. See bundle for decisions and next steps." \
+  --files src/components/Login.tsx,src/api/auth.ts,src/types/auth.ts \
+  --transcript 10-25:detailed \
+  --events 50-75
+```
+
+### Receive and Expand Bundle
+
+Recipient agent:
+
+```bash
+# See attached bundle in message
+hcom listen
+
+# Expand full bundle
+hcom bundle cat bundle:abc123
+
+# Now you have:
+# - File contents
+# - Transcript exchanges (with tool calls if detailed)
+# - Event history (messages, status changes)
+# - Context from sender
+```
+
+## Shift Handoff Pattern
+
+### Agent A (going offline)
+
+```bash
+# From agent A's perspective:
+"I'm stopping for the day. Creating handoff bundle.
+
+1. hcom bundle prepare --last-transcript 30 --last-events 50
+   # Shows suggested context
+
+2. hcom send '@agent-b Handoff for tomorrow. Context attached.' \
+     --title 'End of shift - API refactor in progress' \
+     --description 'Completed: auth endpoints, user CRUD. \
+       In progress: pagination (see src/api/paginate.ts:42 TODO). \
+       Blocked: waiting for schema approval from @dba. \
+       Next: implement search endpoints after schema approved.' \
+     --files src/api/auth.ts,src/api/users.ts,src/api/paginate.ts \
+     --transcript 15-30:detailed \
+     --events 75-125
+
+3. hcom stop"
+```
+
+### Agent B (taking over)
+
+```bash
+# From agent B's perspective:
+"Just started. Checking for handoffs.
+
+1. hcom listen --from agent-a
+   # Received bundle
+
+2. hcom bundle cat bundle:abc123
+   # Read context
+
+3. Summary of state:
+   - Auth endpoints done ✓
+   - User CRUD done ✓  
+   - Pagination in progress (TODO at src/api/paginate.ts:42)
+   - Blocked on schema approval
+   - Next: search endpoints
+
+4. Check if schema approved:
+   hcom events --from dba --last 10
+
+5. If approved, continue with search endpoints
+   If not, work on pagination while waiting"
+```
+
+## Specialization Handoff
+
+Frontend agent hands off to backend agent:
+
+```bash
+# Frontend agent:
+hcom send '@backend Frontend complete. Need API endpoints.' \
+  --title 'User profile feature - API needed' \
+  --description 'Built profile UI with: avatar upload, bio edit, settings. \
+    API contracts in types file. Need:
+    - GET /api/profile/:id
+    - PUT /api/profile (with multipart for avatar)
+    - DELETE /api/profile/avatar
+    See UI code for expected response shapes.' \
+  --files src/pages/Profile.tsx,src/types/profile.ts,src/api/profile.ts \
+  --transcript 8-12:normal
+
+# Backend agent receives:
+# 1. UI code (to understand UX flow)
+# 2. Type definitions (API contracts)
+# 3. API client (expected request/response format)
+# 4. Transcript (decisions made)
+```
+
+## Escalation Handoff
+
+Junior agent stuck, senior takes over:
+
+```bash
+# Junior agent:
+hcom send '@senior-dev Stuck on database query optimization. Need help.' \
+  --title 'Performance issue - N+1 query' \
+  --description 'Query is slow (3s for 100 users). Tried adding index but no improvement. \
+    Suspect N+1 from nested relations. See attempt at src/db/queries.ts:67. \
+    Profiler output in events.' \
+  --files src/db/queries.ts,src/models/user.ts \
+  --transcript 20-25:detailed \
+  --events 90-110 \
+  --intent request
+
+# Senior receives full context:
+# - Query code
+# - Models (to see relations)  
+# - Transcript (what junior tried)
+# - Events (profiler output, error logs)
+```
+
+## Collaborative Handoff
+
+Multiple agents working on related features:
+
+```bash
+# Agent A (auth):
+hcom bundle create "Auth system - middleware ready" \
+  --description "JWT middleware complete and tested. \
+    Exports: requireAuth, optionalAuth, refreshToken. \
+    Usage examples in tests. Ready for integration." \
+  --files src/middleware/auth.ts,tests/middleware/auth.test.ts
+
+# Send to agents needing auth:
+hcom send '@api-team @frontend-team Auth middleware ready. Examples attached.' \
+  --extends bundle:auth-abc123
+
+# API team extends:
+hcom bundle create "API endpoints with auth" \
+  --description "Protected all user/admin routes with requireAuth. \
+    Public routes use optionalAuth for user context." \
+  --files src/routes/users.ts,src/routes/admin.ts \
+  --extends bundle:auth-abc123
+
+# Now you have a chain:
+hcom bundle chain bundle:api-xyz789
+# Shows: auth middleware → API endpoints
+```
+
+## Bundle Chaining
+
+Extend previous bundles to build context lineage:
+
+```bash
+# Phase 1: Design
+hcom bundle create "Auth design" \
+  --description "Decided on JWT with refresh tokens" \
+  --files docs/auth-design.md
+
+# Phase 2: Implementation (extends design)
+hcom bundle create "Auth implementation" \
+  --description "Implemented JWT endpoints" \
+  --files src/auth/* \
+  --extends bundle:design-abc
+
+# Phase 3: Testing (extends implementation)  
+hcom bundle create "Auth testing" \
+  --description "Added integration tests" \
+  --files tests/auth/* \
+  --extends bundle:impl-xyz
+
+# View lineage:
+hcom bundle chain bundle:test-def
+# Shows: design → implementation → testing
+```
+
+## Message-Only Handoff
+
+For simple handoffs, use messages:
+
+```bash
+hcom send '@next-agent Taking over the deploy. \
+  Status: built successfully, tests passing. \
+  Next: run deploy.sh, monitor logs for 10 min. \
+  Rollback if error rate >1%.'
+```
+
+## Transcript Reading
+
+Read another agent's history:
+
+```bash
+# Read last 10 exchanges
+hcom transcript agent-a --last 10
+
+# Read specific range with details
+hcom transcript agent-a 15-25 --detailed
+
+# Read as JSON for parsing
+hcom transcript agent-a 15-25 --json
+```
+
+Then reference in messages:
+
+```bash
+hcom send '@agent-a Read your transcript 15-25. \
+  Question about the database migration at exchange 18...'
+```
+
+## Complete Handoff Script
+
+Create `~/.hcom/scripts/handoff.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Create handoff bundle and send to successor
+set -euo pipefail
+
+successor="$1"
+summary="$2"
+
+if [[ -z "$successor" || -z "$summary" ]]; then
+  echo "Usage: hcom run handoff <successor> 'summary'"
+  exit 1
+fi
+
+echo "Creating handoff bundle..."
+
+# Get suggested context
+suggestions=$(hcom bundle prepare --last-transcript 20 --last-events 30 --compact)
+
+echo "Suggested context:"
+echo "$suggestions"
+echo
+
+# Extract suggested ranges (simplified - real script would parse JSON)
+transcript_range="1-20:normal"
+event_range="1-30"
+
+# Create bundle
+bundle_id=$(hcom bundle create "Handoff to ${successor}" \
+  --description "${summary}" \
+  --transcript "${transcript_range}" \
+  --events "${event_range}" \
+  --json | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+echo "Bundle created: ${bundle_id}"
+
+# Send to successor
+hcom send "@${successor} Taking over. Context: ${summary}" \
+  --title "Handoff bundle" \
+  --description "${summary}" \
+  --transcript "${transcript_range}" \
+  --events "${event_range}"
+
+echo "Handoff complete. Stopping."
+hcom stop
+```
+
+Usage:
+
+```bash
+hcom run handoff next-agent 'Completed auth, tests passing, ready for deploy'
+```
+
+## Tips
+
+<Tip>
+  Use `--detailed` for transcript when handoff involves complex tool usage or debugging.
+</Tip>
+
+<Tip>
+  Include file content in bundles so successor doesn't need to re-read.
+</Tip>
+
+<Tip>
+  Reference exchange/event IDs in descriptions: "See exchange 18 for decision rationale."
+</Tip>
+
+<Warning>
+  Don't include huge transcript ranges. Focus on relevant exchanges (typically last 10-20).
+</Warning>
+
+## Troubleshooting
+
+### Bundle too large
+
+Reduce scope:
+
+```bash
+# Instead of:
+--transcript 1-50:detailed --events 1-200
+
+# Use:
+--transcript 40-50:detailed --events 180-200
+```
+
+### Successor missed context
+
+Re-send with more detail:
+
+```bash
+hcom send '@successor Did you see the bundle? \
+  Key points: [summarize]. \
+  Bundle ID: bundle:abc123'
+```
+
+### Context fragmented across agents
+
+Collect from multiple sources:
+
+```bash
+# Query events from multiple agents
+hcom events --agent agent-a --agent agent-b --last 50
+
+# Create combined bundle
+hcom bundle create "Combined context" \
+  --description "Context from agent-a and agent-b" \
+  --events <event-ids-from-both>
+```

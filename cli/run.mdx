@@ -1,0 +1,253 @@
+---
+title: 'hcom run'
+description: 'Execute workflow scripts and multi-agent orchestration'
+---
+
+## Overview
+
+`hcom run` executes workflow scripts that orchestrate multiple agents. Scripts can be bundled (included with hcom) or user-created.
+
+## Usage
+
+```bash
+hcom run                        # List available scripts
+hcom run <script>               # Execute a script
+hcom run <script> --help        # Show script options
+hcom run <script> --source      # View script source code
+hcom run docs                   # Full documentation
+```
+
+## Bundled Workflows
+
+hcom includes three powerful multi-agent workflows:
+
+### confess
+
+**Agents:** 3 (calibrator, judge, and confessor or caller)
+
+Honesty self-evaluation based on OpenAI's confessions paper.
+
+```bash
+hcom run confess                         # You confess, 2 agents verify
+hcom run confess --task "auth refactor"  # Evaluate specific task
+hcom run confess --fork                  # Fork mode (3 agents)
+hcom run confess --target nova --fork    # Evaluate another agent
+```
+
+**How it works:**
+
+<Steps>
+  <Step title="Default mode: You are the confessor">
+    You generate a ConfessionReport about your recent work. A calibrator analyzes your transcript independently (baseline). A judge compares both reports and sends a verdict.
+  </Step>
+  <Step title="Fork mode (--fork)">
+    Spawns a forked agent with your memory as confessor. Requires Claude.
+  </Step>
+</Steps>
+
+**Schema:**
+
+```typescript
+type ConfessionReport {
+  compliance_analysis: ObjectiveCompliance[]
+  uncertainties_and_conflicts: string[]
+  overall_compliance_grade: integer  // 1-7
+}
+
+type ObjectiveCompliance {
+  objective: string
+  compliance: "fully_complied" | "nearly_complied" | ...
+  analysis: string
+}
+```
+
+### debate
+
+**Agents:** 2+ debaters + 1 judge
+
+Structured debate with PRO/CON positions and judge evaluation.
+
+```bash
+hcom run debate "AI will replace programmers" --spawn
+hcom run debate "tabs vs spaces" -w sity,offu
+hcom run debate "microservices" --spawn --rounds 4
+```
+
+**Two modes:**
+
+<Tabs>
+  <Tab title="Spawn Mode (--spawn)">
+    Launches fresh PRO and CON debaters with pre-assigned positions.
+    
+    ```bash
+    hcom run debate "topic" --spawn --rounds 3
+    ```
+  </Tab>
+  <Tab title="Workers Mode (--workers)">
+    Uses existing agents who pick their positions dynamically.
+    
+    ```bash
+    hcom run debate "topic" -w agent1,agent2,agent3
+    ```
+  </Tab>
+</Tabs>
+
+**Options:**
+
+- `--rounds, -r N` - Number of rebuttal rounds (default: 2)
+- `--context, -c TEXT` - Additional context for debaters
+- `--tool TOOL` - AI tool for spawned agents (default: claude)
+- `-i, --interactive` - Launch in terminal windows vs background
+
+### fatcow
+
+**Agents:** 1 headless oracle
+
+A dedicated codebase oracle that deeply reads files and answers questions on demand.
+
+```bash
+hcom run fatcow --path src/tools                        # Live fatcow
+hcom run fatcow --path src/ --focus "auth, middleware"  # With focus
+hcom run fatcow --path src/tools --dead                 # Dead mode
+hcom run fatcow --ask fatcow.tools-luna "what does db.py export?"
+```
+
+**Two modes:**
+
+<AccordionGroup>
+  <Accordion title="Live (default)">
+    Stays running in background, subscribes to file changes, answers questions in real-time.
+    
+    ```bash
+    hcom run fatcow --path src/auth
+    hcom send "@fatcow.auth where is JWT validation?"
+    ```
+  </Accordion>
+  <Accordion title="Dead (--dead)">
+    Ingests files then stops. Resumed automatically when queried.
+    
+    ```bash
+    hcom run fatcow --path src/auth --dead
+    hcom run fatcow --ask fatcow.auth-luna "where is JWT validation?"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+**How it works:**
+
+<Steps>
+  <Step title="Ingestion">
+    Reads EVERY file in the specified path. Not skimming - full reads with line numbers, structure, exports, imports.
+  </Step>
+  <Step title="Indexing">
+    Builds mental map of modules, functions, classes, constants, integration points.
+  </Step>
+  <Step title="Subscription (live mode)">
+    Subscribes to file change events. Re-reads files when they change.
+  </Step>
+  <Step title="Answering">
+    Responds with file:line precision when asked questions via hcom.
+  </Step>
+</Steps>
+
+## Custom Scripts
+
+Create your own workflows in `~/.hcom/scripts/`.
+
+### Location
+
+```bash
+~/.hcom/scripts/
+  my-workflow.sh        # Bash script
+  my-workflow.py        # Python script
+```
+
+### Shell Script Template
+
+```bash
+#!/usr/bin/env bash
+# Brief description shown in hcom run list.
+set -euo pipefail
+
+name_flag=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) echo "Usage: hcom run myscript [OPTIONS]"; exit 0 ;;
+    --name) name_flag="$2"; shift 2 ;;
+    --target) target="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+name_arg=""
+[[ -n "$name_flag" ]] && name_arg="--name $name_flag"
+
+# Your logic here
+hcom send "@${target}" $name_arg --intent request -- "Do the task"
+```
+
+### Identity Handling
+
+hcom passes `--name` to scripts automatically. Always parse and forward it:
+
+```bash
+name_arg=""
+[[ -n "$name_flag" ]] && name_arg="--name $name_flag"
+hcom send @target $name_arg -- "message"
+hcom list self --json $name_arg
+```
+
+### Launching & Cleanup
+
+Track spawned agents and clean up on errors:
+
+```bash
+LAUNCHED_NAMES=()
+track_launch() {
+  local names=$(echo "$1" | grep '^Names: ' | sed 's/^Names: //')
+  for n in $names; do LAUNCHED_NAMES+=("$n"); done
+}
+cleanup() {
+  for name in "${LAUNCHED_NAMES[@]}"; do
+    hcom kill "$name" --go 2>/dev/null || true
+  done
+}
+trap cleanup ERR
+
+launch_out=$(hcom 1 claude --tag worker --go --headless 2>&1)
+track_launch "$launch_out"
+```
+
+## Viewing Scripts
+
+View source of any bundled or user script:
+
+```bash
+hcom run confess --source
+hcom run debate --source
+hcom run fatcow --source
+hcom run my-custom-script --source
+```
+
+## Documentation
+
+```bash
+hcom run docs                   # Full docs (CLI + config + scripts)
+hcom run docs --cli             # CLI reference only
+hcom run docs --config          # Config settings only
+hcom run docs --scripts         # Script creation guide
+```
+
+## Tips
+
+<Tip>
+  **User scripts shadow bundled scripts**. If you create `~/.hcom/scripts/confess.sh`, it will override the bundled confess workflow.
+</Tip>
+
+<Tip>
+  **Add descriptions**. The first comment line (after shebang) appears in `hcom run` listings.
+</Tip>
+
+<Warning>
+  Scripts run with inherited stdin/stdout/stderr, so interactive prompts work but may interfere with automation.
+</Warning>

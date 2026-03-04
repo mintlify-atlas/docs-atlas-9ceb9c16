@@ -1,0 +1,251 @@
+---
+title: 'hcom stop'
+description: 'End hcom participation'
+---
+
+## Overview
+
+Disconnect one or more agents from hcom. Preserves instance data in events table for later resume.
+
+## Syntax
+
+```bash
+hcom stop [TARGETS] [FLAGS]
+```
+
+<ParamField path="TARGETS" type="string[]" optional>
+  Agents to stop (names, `tag:X`, or `all`)
+  
+  If omitted, stops self (current agent)
+</ParamField>
+
+## Special Targets
+
+<ParamField path="all" type="keyword">
+  Stop all local instances
+  
+  Cannot be combined with other targets
+  
+  ```bash
+  hcom stop all
+  ```
+</ParamField>
+
+<ParamField path="tag:<name>" type="keyword">
+  Stop all instances with specific tag
+  
+  ```bash
+  hcom stop tag:experiment-1
+  ```
+</ParamField>
+
+## Flags
+
+<ParamField path="--go" type="boolean">
+  Skip confirmation preview when running inside AI tool
+  
+  Required for `all`, `tag:*`, or multi-agent stops from Claude/Gemini/Codex/OpenCode
+</ParamField>
+
+## Behavior
+
+### Self-Stop (No Targets)
+
+Resolves your identity and stops it:
+
+```bash
+# From inside Claude
+hcom stop
+# → Stops current agent
+```
+
+<Warning>
+  Cannot run from within a Task subagent. Subagents must end their turn without calling `hcom stop`.
+</Warning>
+
+### Named Stop
+
+Stop specific agent(s):
+
+```bash
+# Single agent
+hcom stop luna
+
+# Multiple agents
+hcom stop luna nova kira
+```
+
+### Tag Stop
+
+Stop all agents with a tag:
+
+```bash
+hcom stop tag:dev
+# → Stops dev-luna, dev-nova, dev-kira
+```
+
+### Stop All
+
+Stop everything:
+
+```bash
+hcom stop all
+```
+
+<Warning>
+  Requires `--go` flag when run from inside an AI tool to prevent accidental mass stops.
+</Warning>
+
+## What Happens
+
+1. **Headless Instances**: Process killed (SIGTERM → SIGKILL after 2s)
+2. **Interactive Instances**: Notified via TCP (graceful shutdown)
+3. **Stopped Event**: Logged with full snapshot to events table
+4. **Instance Row**: Deleted from instances table
+5. **Subagents**: Recursively stopped when parent stops
+
+Instance data is preserved in the `life.stopped` event with snapshot, enabling resume via `hcom r`.
+
+## Remote Instances
+
+Stopping remote instances (from other devices) sends control message via MQTT relay:
+
+```bash
+hcom stop luna:BOXE
+# → Sends stop command to luna on device BOXE
+```
+
+<Note>
+  Remote instance name must include device suffix (`:BOXE`). Without it, stop fails with "missing device suffix" error.
+</Note>
+
+## Examples
+
+### Self-Stop
+
+```bash
+# From inside agent
+hcom stop
+# Output:
+# Stopped hcom for luna.
+```
+
+### Stop Named Agent
+
+```bash
+hcom stop nova
+# Output:
+# Stopped hcom for nova.
+#
+# Headless log: /Users/anno/.hcom/.tmp/logs/nova_20260304.log
+```
+
+### Stop Multiple Agents
+
+```bash
+hcom stop luna nova kira
+# Output:
+# Stopped: luna, nova, kira
+```
+
+### Stop by Tag
+
+```bash
+hcom stop tag:dev
+# Output:
+# Stopped tag:dev: dev-luna, dev-nova, dev-kira
+```
+
+### Stop All (with Preview)
+
+```bash
+# From inside Claude without --go
+hcom stop all
+
+# Output:
+# == STOP ALL PREVIEW ==
+# This will stop 5 instances.
+#
+# Instances to stop:
+#   luna, nova, kira, zeus, apollo
+#
+# What happens:
+#   • Headless instances (2): process killed (SIGTERM, then SIGKILL after 2s)
+#   • Interactive instances (3): notified via TCP (graceful)
+#   • All: stopped event logged with snapshot, instance rows deleted
+#   • Subagents: recursively stopped when parent stops
+#
+# Instance data preserved in events table (life.stopped with snapshot).
+#
+# Add --go flag and run again to proceed:
+#   hcom --go stop all
+```
+
+### Stop All (with --go)
+
+```bash
+hcom --go stop all
+# Output:
+# Stopped: luna, nova, kira, zeus, apollo
+#
+# Headless logs:
+#   nova: /Users/anno/.hcom/.tmp/logs/nova_20260304.log
+#   zeus: /Users/anno/.hcom/.tmp/logs/zeus_20260304.log
+```
+
+### Stop Tag with Orphans
+
+```bash
+# Tag has already-stopped orphan processes
+hcom stop tag:test
+# Output:
+# No active instances with tag 'test' (already stopped: test-luna)
+# Use 'hcom kill tag:test' to terminate their processes.
+```
+
+## Exit Codes
+
+<ResponseField name="0" type="success">
+  All targets stopped successfully
+</ResponseField>
+
+<ResponseField name="1" type="error">
+  - Identity resolution failed (self-stop)
+  - Instance not found
+  - Running tasks prevent stop (subagent guard)
+  - Relay unavailable (remote instance)
+  - Tag/all with no matches
+</ResponseField>
+
+## Notes
+
+<Note>
+  **Graceful vs Kill**: `hcom stop` is graceful (TCP notify for interactive, SIGTERM for headless). Use `hcom kill` for immediate SIGTERM → SIGKILL.
+</Note>
+
+<Note>
+  **Headless Logs**: Stopped headless instances print their log file path. Logs persist in `~/.hcom/.tmp/logs/` for debugging.
+</Note>
+
+<Note>
+  **Resume**: Stopped instances can be resumed with `hcom r <name>`, which restores session history and cursor position.
+</Note>
+
+<Note>
+  **Subagent Guard**: Cannot run `hcom stop` from within a Task subagent. Subagents should end their turn naturally without calling stop.
+</Note>
+
+<Note>
+  **Confirmation Gate**: When run from inside an AI tool (Claude/Gemini/Codex/OpenCode) with `all`, `tag:*`, or multiple targets, requires `--go` flag and shows preview.
+</Note>
+
+<Note>
+  **Data Preservation**: Stop logs a `life.stopped` event with full instance snapshot (status, directory, session_id, tool, etc.). This enables perfect resume via `hcom r`.
+</Note>
+
+## Related Commands
+
+- [`hcom list --stopped`](/cli/list) - View stopped instances
+- [`hcom r`](/cli/resume) - Resume stopped agents
+- [`hcom kill`](/cli/kill) - Terminate processes immediately
+- [`hcom start`](/cli/start) - Reconnect to hcom

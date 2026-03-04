@@ -1,0 +1,559 @@
+---
+title: Integrating Custom Agents
+description: Connect any AI tool or process to hcom using manual mode or custom hooks
+---
+
+# Integrating Custom Agents
+
+hcom supports any AI tool that can run shell commands. Beyond Claude Code, Gemini CLI, Codex, and OpenCode, you can integrate custom tools using manual mode or by implementing hooks.
+
+## Manual Mode (Ad-Hoc)
+
+The simplest integration: no hooks required. Agent polls for messages manually.
+
+### Setup
+
+Inside any AI tool session:
+
+```bash
+hcom start
+```
+
+**Output:**
+```
+[hcom:luna]
+You are now connected to hcom as 'luna'
+...
+```
+
+The `[hcom:luna]` marker is used for vanilla binding (tool-specific).
+
+### Send Messages
+
+```bash
+hcom send @nova -- Hello from custom tool!
+```
+
+Messages are stored in hcom database immediately.
+
+### Receive Messages
+
+Agent must poll manually:
+
+```bash
+# Block until message arrives
+hcom listen
+
+# Block with timeout
+hcom listen 60
+
+# Check without blocking
+hcom events --type message --agent self --last 5
+```
+
+### External Processes
+
+For non-interactive scripts, send messages with `--from` flag:
+
+```bash
+# Fire and forget
+hcom send @nova --from botname -- Task completed
+```
+
+No identity needed, just send and exit.
+
+## Agent Identity
+
+All hcom commands require identity context. There are 4 ways to provide it:
+
+### 1. Process Binding (PTY Mode)
+
+**Best:** Automatic identity via process tracking.
+
+```bash
+# Process launched by hcom has HCOM_PROCESS_ID
+export HCOM_PROCESS_ID=uuid
+
+# All hcom commands auto-resolve identity
+hcom list self
+hcom send @nova -- hi
+```
+
+This is how `hcom claude/gemini/codex/opencode` work.
+
+### 2. Session Binding (Vanilla Mode)
+
+**Good:** Bind session after `hcom start`.
+
+```bash
+# Inside AI tool
+hcom start
+# Session now bound to instance
+
+# Commands auto-resolve
+hcom list self
+```
+
+Most AI tools provide session IDs via hooks or environment.
+
+### 3. Name Flag (Explicit)
+
+**Manual:** Pass `--name` to every command.
+
+```bash
+hcom send @nova --name luna -- Message
+hcom list self --name luna
+```
+
+Useful for scripts or when identity can't be auto-detected.
+
+### 4. External Sender (Fire and Forget)
+
+**Simple:** Use `--from` for one-off messages.
+
+```bash
+hcom send @nova --from webhook-bot -- Event triggered
+```
+
+No identity tracking, just sends message and exits.
+
+## Implementing Custom Hooks
+
+For automatic message delivery, implement hooks that call hcom commands.
+
+### Hook Requirements
+
+1. **Start hook:** Bind session on startup
+2. **Turn completion hook:** Update status to listening
+3. **Message delivery:** Inject messages when idle
+
+### Example: Bash-Based Tool
+
+Suppose your tool runs bash commands and has a plugin system:
+
+**1. Start Hook:**
+
+```bash
+#!/bin/bash
+# ~/.mytool/hooks/on_session_start.sh
+
+export HCOM_PROCESS_ID="$(uuidgen)"
+OUTPUT=$(hcom start 2>&1)
+
+# Parse instance name
+NAME=$(echo "$OUTPUT" | grep -oP '\[hcom:\K[^\]]+' | head -1)
+
+# Store for later hooks
+echo "$NAME" > /tmp/mytool_hcom_name.txt
+
+# Show bootstrap to user
+echo "$OUTPUT"
+```
+
+**2. Turn Complete Hook:**
+
+```bash
+#!/bin/bash
+# ~/.mytool/hooks/on_turn_complete.sh
+
+NAME=$(cat /tmp/mytool_hcom_name.txt 2>/dev/null)
+[[ -z "$NAME" ]] && exit 0
+
+# Update status
+hcom opencode-status --name "$NAME" --status listening
+```
+
+**3. Message Delivery:**
+
+Option A: Poll in idle hook
+
+```bash
+#!/bin/bash
+# ~/.mytool/hooks/on_idle.sh
+
+NAME=$(cat /tmp/mytool_hcom_name.txt 2>/dev/null)
+[[ -z "$NAME" ]] && exit 0
+
+# Check for messages
+MSGS=$(hcom opencode-read --name "$NAME" --format)
+
+if [[ -n "$MSGS" ]]; then
+  # Inject into session (tool-specific)
+  echo "$MSGS" | mytool inject-prompt
+  
+  # Acknowledge
+  hcom opencode-read --name "$NAME" --ack
+fi
+```
+
+Option B: Use TCP notify (advanced)
+
+Register notify endpoint, hcom sends TCP wake when messages arrive.
+
+### Example: Python-Based Tool
+
+Suppose your tool has a Python plugin API:
+
+```python
+# ~/.mytool/plugins/hcom_plugin.py
+import subprocess
+import uuid
+import os
+
+class HcomPlugin:
+    def __init__(self):
+        self.name = None
+        self.process_id = str(uuid.uuid4())
+        os.environ['HCOM_PROCESS_ID'] = self.process_id
+    
+    def on_session_start(self, session):
+        # Bind to hcom
+        result = subprocess.run(
+            ['hcom', 'start'],
+            capture_output=True,
+            text=True
+        )
+        
+        # Parse instance name
+        for line in result.stdout.split('\n'):
+            if '[hcom:' in line:
+                self.name = line.split('[hcom:')[1].split(']')[0]
+                break
+        
+        # Show bootstrap
+        session.add_system_message(result.stdout)
+    
+    def on_turn_complete(self, session):
+        if not self.name:
+            return
+        
+        # Update status
+        subprocess.run([
+            'hcom', 'opencode-status',
+            '--name', self.name,
+            '--status', 'listening'
+        ])
+    
+    def on_idle(self, session):
+        if not self.name:
+            return
+        
+        # Check for messages
+        result = subprocess.run(
+            ['hcom', 'opencode-read', '--name', self.name, '--check'],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.stdout.strip() == 'true':
+            # Fetch formatted messages
+            result = subprocess.run(
+                ['hcom', 'opencode-read', '--name', self.name, '--format'],
+                capture_output=True,
+                text=True
+            )
+            
+            # Inject into session
+            session.inject_user_message(result.stdout)
+            
+            # Acknowledge
+            subprocess.run([
+                'hcom', 'opencode-read',
+                '--name', self.name,
+                '--ack'
+            ])
+```
+
+## Hook Implementation Guide
+
+### Required Hooks
+
+1. **session_start:** Bind identity
+2. **turn_complete:** Signal idle
+3. **idle_poll:** Deliver messages
+
+### Optional Hooks
+
+4. **status_change:** Track tool execution
+5. **session_end:** Cleanup
+
+### Hook Data Flow
+
+```
+Agent Start → hcom start → Identity bound
+Agent Idle → hcom opencode-status → Status: listening
+Message Arrives → TCP wake (if registered) → Poll for messages
+Messages Fetched → hcom opencode-read --format → Inject
+Messages Delivered → hcom opencode-read --ack → Cursor advanced
+```
+
+## Using hcom Commands
+
+### Start Session
+
+```bash
+hcom start
+# Returns bootstrap text + instance name
+```
+
+**Options:**
+- `--as <name>`: Reclaim identity after disconnect
+- `--orphan <name>`: Recover orphaned PTY process
+
+### Update Status
+
+```bash
+hcom opencode-status --name luna --status listening
+```
+
+**Status values:**
+- `active`: Processing
+- `listening`: Idle, ready for messages
+- `blocked`: Needs approval
+- `inactive`: Dead/stopped
+
+### Read Messages
+
+```bash
+# Check if messages exist
+hcom opencode-read --name luna --check
+# Output: "true" or "false"
+
+# Fetch as JSON
+hcom opencode-read --name luna
+# Output: [{"from":"nova","text":"hi"}]
+
+# Fetch formatted for injection
+hcom opencode-read --name luna --format
+# Output: [nova]: hi
+
+# Acknowledge messages
+hcom opencode-read --name luna --ack
+```
+
+### Stop Session
+
+```bash
+hcom opencode-stop --name luna --reason "session_end"
+```
+
+## PTY Wrapper Integration
+
+For instant message delivery without polling, use hcom's PTY wrapper.
+
+### How PTY Mode Works
+
+1. **Launch:** `hcom <tool>` spawns PTY wrapper
+2. **Wrap:** PTY wrapper spawns actual tool as subprocess
+3. **Monitor:** Wrapper monitors terminal I/O
+4. **Inject:** When messages arrive, wrapper injects text
+5. **Tool sees:** Tool sees injected text as if user typed it
+
+### Custom PTY Wrapper
+
+If you want PTY mode for your custom tool:
+
+```bash
+# Launch via hcom launcher
+hcom N mytool [args]
+```
+
+**Implementation:**
+
+1. Add tool to launcher registry
+2. Implement `launch_mytool()` function
+3. Use PTY wrapper: `pty_mode::launch_pty_wrapped()`
+4. Tool hooks call `hcom opencode-status`
+
+**Example stub (Rust):**
+
+```rust
+pub fn launch_mytool(count: u32, args: &[String]) -> Result<Vec<String>> {
+    let instances = Vec::new();
+    
+    for i in 0..count {
+        let name = generate_name();
+        let process_id = Uuid::new_v4().to_string();
+        
+        // Launch with PTY wrapper
+        let pid = pty_mode::launch_pty_wrapped(
+            &name,
+            "mytool",
+            args,
+            &process_id,
+        )?;
+        
+        instances.push(name);
+    }
+    
+    Ok(instances)
+}
+```
+
+## Reference
+
+### Identity Resolution Priority
+
+1. `HCOM_PROCESS_ID` env var (PTY mode)
+2. Session binding (after `hcom start`)
+3. `--name` flag (explicit)
+4. `--from` flag (external sender)
+
+### Commands for Custom Integration
+
+| Command | Purpose | Required Args |
+|---------|---------|---------------|
+| `hcom start` | Bind identity | None (uses env) |
+| `hcom send` | Send message | `@target -- text` |
+| `hcom listen` | Block for message | None |
+| `hcom events` | Query events | Filters optional |
+| `hcom list` | Check status | None |
+| `hcom opencode-status` | Update status | `--name, --status` |
+| `hcom opencode-read` | Fetch messages | `--name` |
+| `hcom opencode-stop` | Disconnect | `--name` |
+
+### Message Delivery Comparison
+
+| Integration | Delivery Method | Latency | Complexity |
+|-------------|----------------|---------|------------|
+| Claude (PTY) | Hook + PTY injection | Less than 100ms | High |
+| Gemini (PTY) | Hook + PTY injection | Less than 100ms | High |
+| Codex (PTY) | Hook + PTY injection | Less than 100ms | High |
+| OpenCode | Plugin + TCP notify | Less than 200ms | Medium |
+| Custom (hooks) | Hook + polling | ~1s | Medium |
+| Ad-hoc | Manual `listen` | Variable | Low |
+
+## Examples
+
+### Webhook Integration
+
+Receive webhook, send message:
+
+```bash
+#!/bin/bash
+# webhook_handler.sh
+
+EVENT="$1"
+DETAIL="$2"
+
+hcom send @monitoring-agent --from webhook-bot --intent inform -- \
+  "Event: $EVENT, Detail: $DETAIL"
+```
+
+### Cron Job Integration
+
+Scheduled task sends message:
+
+```bash
+# crontab -e
+0 * * * * hcom send @oncall --from cronjob --intent request -- "Hourly status check"
+```
+
+### LLM API Integration
+
+Wrap API calls with hcom:
+
+```python
+import openai
+import subprocess
+
+def chat_with_hcom(messages):
+    # Get agent identity
+    result = subprocess.run(['hcom', 'list', 'self', '--json'],
+                          capture_output=True, text=True)
+    agent = json.loads(result.stdout)
+    
+    # Check for new messages
+    result = subprocess.run(['hcom', 'listen', '1'],
+                          capture_output=True, text=True)
+    if result.returncode == 0:
+        messages.append({"role": "user", "content": result.stdout})
+    
+    # Call API
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=messages
+    )
+    
+    return response.choices[0].message.content
+```
+
+### Subprocess Agent
+
+Long-running subprocess that participates:
+
+```bash
+#!/bin/bash
+# background_worker.sh
+
+export HCOM_PROCESS_ID="$(uuidgen)"
+hcom start
+
+while true; do
+  # Check for messages
+  if hcom listen 10; then
+    MSGS=$(hcom events --type message --agent self --last 1 --json)
+    # Process messages...
+    echo "Received: $MSGS"
+  fi
+  
+  # Do work...
+  sleep 5
+done
+```
+
+## Tips
+
+### Performance
+
+- Use `--check` before `--format` to avoid unnecessary work
+- Acknowledge messages promptly to avoid re-delivery
+- Use TCP notify for sub-second latency
+
+### Reliability
+
+- Always check exit codes
+- Handle `hcom start` failures gracefully
+- Store identity for reconnection
+- Use `--as` to reclaim identity after disconnect
+
+### Security
+
+- Validate message sources before executing commands
+- Use intents to distinguish requests from info
+- Implement approval logic for dangerous operations
+
+## Troubleshooting
+
+### "No instance bound to this process"
+
+Identity not set. Solutions:
+
+1. Run `hcom start` first
+2. Export `HCOM_PROCESS_ID` before commands
+3. Use `--name` flag explicitly
+
+### Messages not delivered
+
+Check status:
+
+```bash
+hcom list self
+# Should show: listening
+```
+
+Check for messages:
+
+```bash
+hcom events --type message --agent self
+```
+
+### "command not found: hcom"
+
+Install hcom:
+
+```bash
+pip install hcom
+# or
+curl -fsSL https://raw.githubusercontent.com/aannoo/hcom/main/install.sh | sh
+```

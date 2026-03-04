@@ -1,0 +1,387 @@
+---
+title: hcom transcript
+description: View and search agent conversation transcripts
+---
+
+## Overview
+
+Read agent conversation transcripts with multiple detail levels, search across all transcripts, and view timeline of recent activity.
+
+Supports Claude, Gemini, Codex, and OpenCode transcript formats.
+
+## View Transcript
+
+```bash
+hcom transcript <name> [range] [--full] [--detailed] [--last N]
+```
+
+### Basic Usage
+
+```bash
+# Last 10 exchanges (default)
+hcom transcript luna
+
+# Last 20 exchanges
+hcom transcript luna --last 20
+
+# Specific exchange
+hcom transcript luna 5
+
+# Range of exchanges
+hcom transcript luna 5-10
+
+# Alternative flag syntax
+hcom transcript luna --range 5-10
+```
+
+## Detail Levels
+
+<ParamField path="--full" type="boolean">
+  Show complete assistant responses (no truncation)
+  
+  Default: Action text truncated to ~200 chars
+  
+  ```bash
+  hcom transcript luna 5-10 --full
+  ```
+</ParamField>
+
+<ParamField path="--detailed" type="boolean">
+  Show complete text + tool I/O, file edits, errors
+  
+  Includes:
+  - Tool names and results
+  - File edit diffs (truncated to 100 chars)
+  - Error detection in tool outputs
+  - Command text for Bash tools
+  
+  ```bash
+  hcom transcript luna 15-20 --detailed
+  ```
+</ParamField>
+
+### Detail Level Comparison
+
+| Level | User Text | Action Text | Tools | File Edits | Errors |
+|-------|-----------|-------------|-------|------------|--------|
+| **normal** | Full | ~200 chars | Names only | No | No |
+| **full** | Full | Complete | Names only | No | No |
+| **detailed** | Full | Complete | Full I/O | Diffs shown | Yes |
+
+## Output Formats
+
+<ParamField path="--json" type="boolean">
+  Output as JSON array
+  
+  ```bash
+  hcom transcript luna 5-10 --json
+  ```
+  
+  Structure:
+  ```json
+  [
+    {
+      "position": 5,
+      "user": "user prompt text",
+      "action": "assistant response",
+      "tools": ["Bash", "Edit"],
+      "files": ["auth.py"],
+      "timestamp": "2026-03-04T10:30:00Z",
+      "ended_on_error": false
+    }
+  ]
+  ```
+</ParamField>
+
+### Default Output
+
+```
+#5 | 2026-03-04 10:30
+User: Fix the auth bug
+Action: I'll check the authentication flow and fix the issue...
+Tools: Read(auth.py), Bash, Edit(auth.py)
+Files: auth.py
+
+#6 | 2026-03-04 10:35
+User: Run the tests
+Action: Running the test suite...
+Tools: Bash
+```
+
+## Search Transcripts
+
+```bash
+hcom transcript search "<pattern>" [options]
+```
+
+Search all tracked agent transcripts using regex patterns.
+
+<ParamField path="pattern" type="string" required>
+  Search pattern (regex)
+  
+  ```bash
+  hcom transcript search "auth.*error"
+  hcom transcript search "TODO"
+  ```
+</ParamField>
+
+### Search Options
+
+<ParamField path="--live" type="boolean">
+  Search only currently alive agents
+  
+  ```bash
+  hcom transcript search "fix" --live
+  ```
+</ParamField>
+
+<ParamField path="--all" type="boolean">
+  Search all transcripts on disk (not just tracked instances)
+  
+  ```bash
+  hcom transcript search "deprecated" --all
+  ```
+</ParamField>
+
+<ParamField path="--limit" type="number" default="20">
+  Max results
+  
+  ```bash
+  hcom transcript search "error" --limit 50
+  ```
+</ParamField>
+
+<ParamField path="--agent" type="string">
+  Filter by agent type: `claude`, `gemini`, `codex`, `opencode`
+  
+  ```bash
+  hcom transcript search "api" --agent claude
+  ```
+</ParamField>
+
+<ParamField path="--exclude-self" type="boolean">
+  Exclude own transcript from results
+  
+  ```bash
+  hcom transcript search "review" --exclude-self
+  ```
+</ParamField>
+
+<ParamField path="--json" type="boolean">
+  JSON output
+  
+  ```bash
+  hcom transcript search "error" --json
+  ```
+</ParamField>
+
+### Search Examples
+
+```bash
+# Find error messages
+hcom transcript search "error|failed|exception"
+
+# Find TODOs in active agents
+hcom transcript search "TODO" --live
+
+# Search specific agent type
+hcom transcript search "database" --agent claude --limit 10
+
+# Search all transcripts (including stopped agents)
+hcom transcript search "migration" --all
+```
+
+## Timeline View
+
+```bash
+hcom transcript timeline [options]
+```
+
+Show chronological timeline of user prompts across all agents.
+
+<ParamField path="--last" type="number">
+  Last N exchanges per agent
+  
+  ```bash
+  hcom transcript timeline --last 5
+  ```
+</ParamField>
+
+<ParamField path="--full" type="boolean">
+  Show complete text
+  
+  ```bash
+  hcom transcript timeline --full
+  ```
+</ParamField>
+
+<ParamField path="--detailed" type="boolean">
+  Show detailed tool info
+  
+  ```bash
+  hcom transcript timeline --detailed
+  ```
+</ParamField>
+
+<ParamField path="--json" type="boolean">
+  JSON output
+  
+  ```bash
+  hcom transcript timeline --json
+  ```
+</ParamField>
+
+### Timeline Example
+
+```bash
+hcom transcript timeline --last 3
+```
+
+Output:
+```
+2026-03-04 10:30 | luna   | Fix auth bug
+2026-03-04 10:32 | nova   | Deploy to staging
+2026-03-04 10:35 | luna   | Run tests
+2026-03-04 10:40 | kira   | Review PR #99
+```
+
+## Tool Name Normalization
+
+hcom normalizes tool names across different agent implementations:
+
+| Agent Tool | Canonical Name |
+|------------|----------------|
+| `run_shell_command`, `shell`, `bash` | **Bash** |
+| `read_file`, `read` | **Read** |
+| `write_file`, `write` | **Write** |
+| `edit_file`, `edit`, `apply_patch` | **Edit** |
+| `search_files`, `grep` | **Grep** |
+| `list_files`, `list_directory`, `glob` | **Glob** |
+| `fetch` | **WebFetch** |
+
+## Error Detection
+
+In `--detailed` mode, hcom detects errors in tool results:
+
+- Exit code ≠ 0 for Bash commands
+- Keywords: `error:`, `failed`, `exception`, `rejected`, `traceback`
+- Tool result `is_error` flag
+
+Exchanges ending with errors are marked with `⚠` indicator.
+
+## Examples
+
+### Basic Viewing
+
+```bash
+# Quick look at last 5 exchanges
+hcom transcript luna --last 5
+
+# View specific exchange in detail
+hcom transcript luna 42 --detailed
+
+# View range with full text
+hcom transcript nova 10-15 --full
+
+# Get as JSON for processing
+hcom transcript luna 20-30 --json | jq '.[] | .tools'
+```
+
+### Bundle References
+
+Refer to transcript ranges in messages instead of copying text:
+
+```bash
+# Reference in message
+hcom send @nova -- Review my transcript range 7-10 --full
+
+# Create bundle with transcript
+hcom send @nova \
+  --title "Auth Fix Context" \
+  --description "Fixed token validation bug" \
+  --transcript "7-10:detailed" \
+  -- Context attached
+```
+
+### Search Workflows
+
+```bash
+# Find who worked on auth code
+hcom transcript search "auth" --live
+
+# Find error patterns
+hcom transcript search "(error|failed).*database" --limit 5
+
+# Search across all sessions
+hcom transcript search "migration" --all --agent codex
+
+# Exclude own work
+hcom transcript search "API" --exclude-self
+```
+
+### Timeline Analysis
+
+```bash
+# Recent activity across all agents
+hcom transcript timeline
+
+# Detailed view of last 10 from each agent
+hcom transcript timeline --last 10 --detailed
+
+# Export to JSON
+hcom transcript timeline --json > activity.json
+```
+
+### Debugging
+
+```bash
+# View failed exchanges
+hcom transcript luna --detailed | grep -A 5 "⚠"
+
+# Check tool errors
+hcom transcript nova 50-60 --detailed --json | \
+  jq '.[] | select(.ended_on_error == true)'
+
+# Find file edit history
+hcom transcript luna --detailed | grep "Edit("
+```
+
+## Transcript Formats
+
+### Claude
+
+Format: JSONL (`.jsonl`)
+- Location: `~/.claude/projects/<project>/transcripts/`
+- Entries: `user`, `assistant`, `system`
+- Tool results in `tool_result` blocks
+
+### Gemini
+
+Format: JSON (`.json`)
+- Location: `~/.gemini/transcripts/`
+- Messages array with `type` field
+- `displayContent` for user-visible text
+
+### Codex
+
+Format: JSONL (`.jsonl`)
+- Two formats: `response_item` (older) and `event_msg` (newer)
+- Tool calls: `function_call` + `function_call_output`
+
+### OpenCode
+
+Format: SQLite (`.db`)
+- Location: `~/.config/opencode/`
+- Tables: `message`, `part`
+- Requires `session_id` for multi-session databases
+
+## Notes
+
+- Transcript paths stored in instances table
+- Position numbers are exchange numbers (user + assistant pair)
+- Tool results matched to tool_use blocks in detailed mode
+- File paths shown as basenames (e.g., `auth.py` not `/full/path/auth.py`)
+- Edit tool shows diff preview (first 100 chars per side)
+- Bash commands truncated to 80 chars in display
+- Empty exchanges (no user text) are skipped
+- `--last` applies after parsing (gets last N exchanges)

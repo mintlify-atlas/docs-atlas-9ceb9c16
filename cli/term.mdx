@@ -1,0 +1,343 @@
+---
+title: 'hcom term'
+description: 'Terminal screen query, text injection, and debug logging'
+---
+
+## Overview
+
+The `hcom term` command provides terminal administration for PTY-managed agent instances. Query terminal screens, inject text/enter for approvals, and enable debug logging.
+
+## Screen Query
+
+View the current terminal screen of running agents.
+
+### Query All PTY Instances
+
+```bash
+# Show all PTY screens
+hcom term
+```
+
+**Output:**
+```
+[luna]
+Screen 24x80  cursor (15,42)
+ready=true  prompt_empty=false  input_text="hcom send @nova"
+
+  0: OpenCode Agent - luna
+  1: Working directory: /home/user/project
+  ...
+  15: > hcom send @nova
+```
+
+### Query Specific Agent
+
+```bash
+# Show screen for specific agent
+hcom term luna
+hcom term api-luna        # Full name
+
+# JSON output
+hcom term luna --json
+```
+
+**JSON fields:**
+- `lines[]` - Screen lines (array of strings)
+- `size[rows,cols]` - Terminal dimensions
+- `cursor[row,col]` - Cursor position (0-indexed)
+- `ready` - Whether agent is ready for input
+- `prompt_empty` - Whether input buffer is empty
+- `input_text` - Current text in input buffer
+
+### JSON Example
+
+```json
+{
+  "lines": [
+    "OpenCode Agent - luna",
+    "Working directory: /home/user/project",
+    "",
+    "> hcom send @nova"
+  ],
+  "size": [24, 80],
+  "cursor": [15, 18],
+  "ready": true,
+  "prompt_empty": false,
+  "input_text": "hcom send @nova"
+}
+```
+
+## Text Injection
+
+Inject text or enter key into agent terminal (for approvals, input).
+
+### Inject Text Only
+
+```bash
+# Inject text (no enter)
+hcom term inject luna "y"
+hcom term inject nova "approve"
+```
+
+### Inject Text + Enter
+
+```bash
+# Inject text and press enter
+hcom term inject luna "y" --enter
+hcom term inject nova "hcom send @luna -- done" --enter
+```
+
+### Inject Enter Only
+
+```bash
+# Press enter without text
+hcom term inject luna --enter
+```
+
+**Output:**
+```
+Injected 1 chars + enter to luna
+```
+
+## Use Cases
+
+### Remote Approvals
+
+```bash
+# Approve tool use remotely
+hcom term inject peso "y" --enter
+
+# Cancel operation
+hcom term inject peso "n" --enter
+```
+
+### Automated Workflows
+
+```bash
+# Send command to agent
+hcom term inject luna "hcom send @nova -- status update" --enter
+
+# Multi-step automation
+hcom term inject worker "y" --enter
+sleep 2
+hcom term inject worker "hcom stop" --enter
+```
+
+### Debug & Recovery
+
+```bash
+# Clear stuck input
+hcom term inject agent "" --enter
+
+# Send interrupt (if PTY supports)
+hcom term inject agent "^C"
+```
+
+## PTY Debug Logging
+
+Enable detailed logging for PTY instances (screen updates, input, output).
+
+### Enable Debug Logging
+
+```bash
+# Turn on PTY debug logging
+hcom term debug on
+```
+
+**Output:**
+```
+PTY debug logging enabled. Running instances pick up within ~10s.
+```
+
+### Disable Debug Logging
+
+```bash
+# Turn off PTY debug logging
+hcom term debug off
+```
+
+**Output:**
+```
+PTY debug logging disabled.
+```
+
+### Check Debug Status
+
+```bash
+# Show current debug status
+hcom term debug
+```
+
+**Output:**
+```
+PTY debug logging is on. Usage: hcom term debug on|off|logs
+```
+
+### List Debug Logs
+
+```bash
+# List all debug log files
+hcom term debug logs
+```
+
+**Output:**
+```
+Debug logging: ON
+Log dir: /home/user/.hcom/.tmp/logs/pty_debug
+  pty_luna_20260304153045.log  (12843 bytes)
+  pty_nova_20260304152030.log  (8192 bytes)
+```
+
+**Log location:** `~/.hcom/.tmp/logs/pty_debug/`
+
+## Technical Details
+
+### PTY Instances
+
+Only agents launched with `hcom N claude|gemini|codex|opencode` have PTY support. These register inject ports in the `notify_endpoints` table.
+
+**Detection:**
+- PTY instances have inject ports (TCP localhost)
+- Non-PTY instances (vanilla, ad-hoc) do not support term commands
+
+### Inject Protocol
+
+- Text injection: TCP write to inject port
+- Enter injection: Send `\r` (carriage return)
+- 100ms delay between text and enter
+- Non-blocking (fire and forget)
+
+### Screen Query Protocol
+
+- Send `\x00SCREEN\n` to inject port
+- Receive JSON response
+- 2 second timeout
+
+### Debug Logging
+
+When enabled:
+- Instances check flag file every ~10s
+- Logs all PTY events (input, output, screen updates)
+- Separate log file per instance
+- No automatic cleanup (manual deletion required)
+
+## Error Handling
+
+### No Inject Port
+
+```bash
+hcom term inject luna "y"
+```
+
+**Output:**
+```
+No inject port for 'luna'. Instance not running or not PTY-managed.
+```
+
+**Solution:** Agent must be launched with `hcom N <tool>`, not vanilla.
+
+### No Response
+
+```bash
+hcom term luna
+```
+
+**Output:**
+```
+No response from 'luna' (port 12345).
+```
+
+**Solution:** Agent may be crashed or port blocked. Check `hcom list`.
+
+### Not Found
+
+```bash
+hcom term nonexistent
+```
+
+**Output:**
+```
+No inject port for 'nonexistent'. Instance not running or not PTY-managed.
+```
+
+**Solution:** Use `hcom list` to see available agents.
+
+## Examples
+
+### Monitor Agent Screens
+
+```bash
+# Show all agent screens
+hcom term
+
+# Monitor specific agent
+watch -n 1 'hcom term luna'
+
+# JSON for parsing
+hcom term luna --json | jq '.input_text'
+```
+
+### Approval Automation
+
+```bash
+#!/bin/bash
+# Auto-approve script
+while true; do
+  screen=$(hcom term worker --json)
+  if echo "$screen" | jq -e '.input_text | contains("approve")' > /dev/null; then
+    hcom term inject worker "y" --enter
+    break
+  fi
+  sleep 2
+done
+```
+
+### Debug PTY Issues
+
+```bash
+# Enable debug logging
+hcom term debug on
+
+# Reproduce issue
+hcom term inject luna "test" --enter
+
+# Check logs
+hcom term debug logs
+cat ~/.hcom/.tmp/logs/pty_debug/pty_luna_*.log
+
+# Disable when done
+hcom term debug off
+```
+
+### Remote Control
+
+```bash
+# Send command to agent from another machine
+ssh user@host 'hcom term inject luna "hcom send @nova -- task complete" --enter'
+
+# Check screen remotely
+ssh user@host 'hcom term luna'
+```
+
+## Limitations
+
+- PTY instances only (not vanilla or ad-hoc)
+- No support for ANSI colors in screen dump
+- Inject is fire-and-forget (no confirmation)
+- Debug logs are not rotated
+- Screen query shows rendered text only (no styling)
+
+## Tips
+
+- Use `--json` for programmatic parsing
+- Check `ready` field before injecting
+- Use `--enter` for most operations
+- Enable debug logging only when needed (verbose output)
+- Query screen before inject to verify state
+- Use display names (resolves to full names automatically)
+
+## See Also
+
+- [hcom list](/cli/list) - Agent status
+- [hcom status](/cli/status) - System diagnostics
+- [hcom kill](/cli/kill) - Terminate agents

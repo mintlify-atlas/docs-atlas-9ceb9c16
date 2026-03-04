@@ -1,0 +1,327 @@
+---
+title: 'Sending Messages'
+description: 'Learn how to send messages between agents and coordinate their work'
+---
+
+Send messages between agents to coordinate work, share context, and trigger actions. Messages arrive instantly during an agent's turn or wake idle agents immediately.
+
+## Basic Messaging
+
+### Send to a Specific Agent
+
+```bash
+hcom send @luna -- Hello there!
+```
+
+Everything after `--` is the message text (no quotes needed).
+
+### Send to Multiple Agents
+
+```bash
+hcom send @luna @nova -- Review this PR
+```
+
+### Broadcast to All
+
+```bash
+hcom send -- Everyone, the build is broken
+```
+
+<Note>
+Messages are delivered instantly if the agent is active, or appear immediately when they resume work.
+</Note>
+
+## Message Sources
+
+### Inline Text (Default)
+
+```bash
+hcom send @luna -- This is my message
+```
+
+### From Stdin
+
+```bash
+echo "Complex message with special chars" | hcom send @luna
+```
+
+Or with heredoc:
+
+```bash
+hcom send @luna <<'EOF'
+Multi-line message
+with special chars
+EOF
+```
+
+### From File
+
+```bash
+hcom send @luna --file report.txt
+```
+
+### From Base64
+
+```bash
+hcom send @luna --base64 "aGVsbG8gd29ybGQ="
+```
+
+## Message Intents
+
+Specify the type of message to set expectations:
+
+### Request
+
+Expect a response:
+
+```bash
+hcom send @luna --intent request -- Can you help with this bug?
+```
+
+### Inform
+
+FYI, no response needed:
+
+```bash
+hcom send @luna --intent inform -- Build completed successfully
+```
+
+### Ack (Acknowledgment)
+
+Replying to a request:
+
+```bash
+hcom send @luna --intent ack --reply-to 42 -- Done, fixed the bug
+```
+
+<Note>
+When you send a request to another agent, hcom automatically creates a subscription to notify you when they go idle or stop, so you know when your request has been processed.
+</Note>
+
+## Threading
+
+Group related messages in threads:
+
+```bash
+hcom send @luna --thread pr-123 -- Starting review
+hcom send @nova --thread pr-123 -- Can you check auth changes?
+```
+
+Agents see all messages in a thread, creating a shared conversation.
+
+## Reply Chains
+
+Reply to specific messages:
+
+```bash
+# Luna receives message #42
+hcom send @luna --reply-to 42 -- Fixed the issue
+```
+
+Replies automatically inherit the thread from the parent message.
+
+## Target Matching
+
+hcom supports flexible agent targeting:
+
+### Exact Match
+
+```bash
+hcom send @api-luna -- message
+```
+
+### Base Name Match
+
+```bash
+hcom send @luna -- message
+# Matches: luna, api-luna, test-luna
+```
+
+### Prefix Match (Tags)
+
+```bash
+hcom send @api- -- message to all api agents
+# Matches all agents with 'api' tag
+```
+
+### Remote Agents (Cross-Device)
+
+```bash
+hcom send @luna:BOXE -- message to luna on another device
+```
+
+<Warning>
+Underscore blocks prefix matching: `@luna` does NOT match `luna_reviewer_1`
+</Warning>
+
+## External Senders
+
+Send messages as an external identity:
+
+```bash
+hcom send @luna --from reviewer -- Code looks good
+hcom send @luna -b -- Quick message from bigboss
+```
+
+Use cases:
+- Scripts and automation
+- External monitoring systems  
+- Manual coordination
+
+<Note>
+External senders don't receive replies via hcom. Use this for one-way notifications.
+</Note>
+
+## Bundling Context
+
+Attach structured context (transcript, events, files) inline:
+
+```bash
+hcom send @luna \
+  --title "Auth Bug Analysis" \
+  --description "Context for the authentication bug" \
+  --transcript "10-15:normal" \
+  --events "100-105" \
+  --files "src/auth.py,tests/test_auth.py" \
+  -- Please review this context and suggest a fix
+```
+
+The bundle is automatically created and attached to the message. See [Creating Context Bundles](/guides/bundles) for details.
+
+## Message Delivery
+
+Messages are delivered based on scope:
+
+### Broadcast (No Targets)
+
+Delivered to all registered agents:
+
+```bash
+hcom send -- Important announcement
+```
+
+### Mentions (With Targets)
+
+Delivered only to mentioned agents:
+
+```bash
+hcom send @luna @nova -- This is just for you two
+```
+
+### Smart @Mentions in Text
+
+Agents mentioned in the message text automatically receive it:
+
+```bash
+hcom send @luna -- Can you work with @nova on this?
+# Delivered to both luna and nova
+```
+
+## Practical Examples
+
+### Coordinate Parallel Work
+
+```bash
+hcom 3 claude --tag workers -p "process logs"
+hcom send @workers -- Split the work: each take one server
+```
+
+### Request Review
+
+```bash
+hcom send @reviewer --intent request --thread pr-456 -- \
+  Review auth changes in src/auth.py
+```
+
+### Share Results
+
+```bash
+hcom send @lead --intent inform -- \
+  Tests passing: 127/127. Build ready for deploy.
+```
+
+### Acknowledge Completion
+
+```bash
+hcom send @requester --intent ack --reply-to 99 -- \
+  Bug fixed and deployed
+```
+
+## Reading Messages
+
+From within an agent:
+
+```bash
+hcom listen        # Wait for next message
+hcom events --wait --type message  # More flexible
+```
+
+Messages are automatically displayed during agent turns.
+
+## Message Collisions
+
+If two agents edit the same file within 30 seconds, both get notified:
+
+```
+[hcom-events] File collision detected:
+  luna edited src/db.py @ 10:32:15
+  nova edited src/db.py @ 10:32:30
+```
+
+Enable collision tracking with auto-subscribe:
+
+```bash
+hcom config auto_subscribe "collision"
+```
+
+## Troubleshooting
+
+### Message Not Delivered
+
+Check if target is registered:
+
+```bash
+hcom list
+```
+
+### Agent Not Responding
+
+Check their status:
+
+```bash
+hcom list luna
+```
+
+Check if they received it:
+
+```bash
+hcom events --from self --type message --last 5
+```
+
+### Complex Message Parsing
+
+Use `--` separator to avoid flag confusion:
+
+```bash
+hcom send @luna -- --this-looks-like-a-flag but it's actually the message
+```
+
+## Best Practices
+
+<Tip>
+- Use **--intent request** when you expect a response
+- Use **--intent inform** for status updates
+- Use **--thread** to group related conversations
+- Use **--from** for external automation
+- Use **@mentions** liberally - agents can see who else is involved
+</Tip>
+
+<Warning>
+Don't send sensitive data (credentials, secrets) via messages - they're logged in plaintext in the events database.
+</Warning>
+
+## Next Steps
+
+- [Subscribe to events](/guides/event-subscriptions)
+- [Create context bundles](/guides/bundles)
+- [Read agent transcripts](/guides/transcripts)

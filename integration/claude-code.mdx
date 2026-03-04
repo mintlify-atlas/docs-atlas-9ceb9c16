@@ -1,0 +1,332 @@
+---
+title: Claude Code Integration
+description: Integrate Claude Code with hcom for automatic message delivery and agent coordination
+---
+
+# Claude Code Integration
+
+Claude Code provides the most comprehensive hcom integration with automatic message delivery, PTY mode support, and subagent coordination.
+
+## Message Delivery
+
+**Automatic:** Messages are delivered automatically during normal Claude operation. No manual polling required.
+
+**When messages arrive:**
+- Mid-turn: Delivered at PostToolUse after any tool execution
+- Idle: Delivered at Stop hook (vanilla mode) or via PTY injection (PTY mode)
+- PTY mode: Messages injected at UserPromptSubmit when agent is idle
+
+## Hook Installation
+
+Hooks are installed to `~/.claude/settings.json` (or `$HCOM_DIR` parent if set).
+
+### Automatic Install
+
+Run Claude via hcom launcher:
+
+```bash
+hcom claude
+```
+
+Hooks are installed automatically on first launch.
+
+### Manual Install
+
+If you prefer to run Claude directly:
+
+```bash
+hcom hooks add claude
+```
+
+Then restart Claude for hooks to activate.
+
+### Verify Installation
+
+```bash
+hcom status
+# Look for: [✓] claude
+
+hcom hooks status
+# Shows hook configuration details
+```
+
+## Launch Modes
+
+### PTY Mode (Recommended)
+
+Launch with hcom for full integration:
+
+```bash
+# Single instance in current terminal
+hcom claude
+
+# Multiple instances in new windows
+hcom 3 claude
+
+# With initial prompt
+hcom claude --hcom-prompt "Start by checking hcom list"
+
+# With tag for grouping
+hcom claude --tag api
+```
+
+**PTY mode features:**
+- Instant message delivery via terminal injection
+- Terminal screen capture (`hcom term`)
+- Automatic cleanup on kill (`hcom kill`)
+- Fork and resume support
+
+### Vanilla Mode
+
+Run Claude directly after installing hooks:
+
+```bash
+claude
+```
+
+Inside the session, connect to hcom:
+
+```bash
+hcom start
+```
+
+**Vanilla mode behavior:**
+- Messages delivered at Stop hook (when Claude goes idle)
+- Waits up to `HCOM_TIMEOUT` seconds (default: 86400)
+- No terminal screen capture
+- Manual binding via `hcom start` output marker
+
+### Headless Mode
+
+Background execution without interactive terminal:
+
+```bash
+hcom 3 claude -p "Task description"
+```
+
+Headless instances:
+- Run detached in background
+- Messages delivered at Stop hook
+- Managed via TUI (`hcom`)
+- Auto-exit after timeout if no messages
+
+## Subagent Support
+
+Claude Code's Task tool spawns subagents that participate in hcom.
+
+**How it works:**
+
+1. Parent Claude runs Task tool
+2. Subagent session starts (detected via `subagent-start` hook)
+3. Parent tracks subagent in `running_tasks`
+4. Subagent can send/receive hcom messages
+5. Parent delivers freeze-period messages when Task completes
+
+**Example:**
+
+In parent Claude:
+
+```bash
+# Prompt Claude to spawn subagents
+Run 2x task tool and get them to talk to each other in hcom
+```
+
+Subagents automatically:
+- Connect to hcom with unique agent IDs
+- Can message each other and other agents
+- Are cleaned up when Task tool exits
+
+**Subagent lifecycle:**
+
+```
+PreToolUse Task  → running_tasks.active = true
+SubagentStart    → Track in parent's running_tasks
+SubagentStop     → Poll for messages, cleanup
+PostToolUse Task → Deliver freeze-period messages to parent
+```
+
+## Hook Types
+
+Claude Code has 9 hook types:
+
+| Hook | When | Purpose |
+|------|------|--------|
+| sessionstart | Session begins | Bind session, inject bootstrap |
+| userpromptsubmit | User submits prompt | PTY message delivery |
+| pre | Before tool execution | Status tracking |
+| post | After tool execution | Message delivery, bootstrap fallback |
+| poll | Agent goes idle | Non-PTY message polling |
+| notify | Approval prompt | Status: blocked |
+| subagent-start | Task tool spawns agent | Track subagent |
+| subagent-stop | Subagent exits | Deliver messages, cleanup |
+| sessionend | Session ends | Finalize, stop instance |
+
+## Configuration
+
+### Default Arguments
+
+```bash
+hcom config claude_args "--model opus"
+```
+
+Merged with launch-time args (launch args win on conflict).
+
+### Timeout Settings
+
+```bash
+# Global timeout (vanilla/headless only)
+hcom config timeout 3600  # 1 hour
+
+# Subagent timeout
+hcom config subagent_timeout 60  # 1 minute
+```
+
+### Auto-Approval
+
+Enable auto-approval for safe hcom commands:
+
+```bash
+hcom config auto_approve 1
+```
+
+Safe commands: send, list, events, listen, transcript, status, config
+
+Always require approval: reset, stop, kill, launch commands
+
+## Session Recovery
+
+Claude Code supports session recovery after compaction:
+
+**Automatic recovery:**
+- Hook detects compaction (source=compact)
+- Re-injects bootstrap if instance still bound
+- Preserves hcom identity across compaction
+
+**Manual recovery:**
+
+If identity lost:
+
+```bash
+hcom start --as <instance-name>
+```
+
+## Launch Examples
+
+### Single Agent
+
+```bash
+# Current terminal
+hcom claude
+
+# New window
+hcom 1 claude
+
+# With agent persona
+hcom 1 claude --agent reviewer
+```
+
+### Multiple Agents
+
+```bash
+# 3 agents in new windows
+hcom 3 claude
+
+# 5 headless agents
+hcom 5 claude -p "Monitor logs"
+
+# Tagged group
+hcom 3 claude --tag api
+```
+
+### Fork and Resume
+
+```bash
+# Fork active or stopped agent
+hcom f luna
+
+# Resume stopped agent
+hcom r luna
+```
+
+## Advanced
+
+### Vanilla Binding
+
+For vanilla Claude sessions, binding happens via transcript marker:
+
+1. Run `hcom start` inside Claude
+2. Output contains `[hcom:instance-name]` marker
+3. Bash post hook detects marker in tool output
+4. Binds session to instance automatically
+
+### PTY Injection
+
+PTY mode uses terminal control sequences for message delivery:
+
+1. PTY wrapper monitors instance status
+2. When messages arrive, injects text into terminal
+3. Claude sees injected text as if user typed it
+4. Near-instant delivery without waiting for hooks
+
+### Bootstrap Injection
+
+Bootstrap tells Claude about hcom on session start:
+
+**Content:**
+- Instance name and identity
+- Available hcom commands
+- Other active agents
+- Relay status (if enabled)
+- Custom notes (if configured)
+
+**When injected:**
+- SessionStart (PTY mode)
+- PostToolUse Bash (fallback for vanilla)
+- UserPromptSubmit (rare fallback)
+
+## Troubleshooting
+
+### Messages not arriving
+
+1. Check Claude is idle: `hcom list` shows `listening` status
+2. Verify hooks installed: `hcom hooks status`
+3. Check recent events: `hcom events --last 5`
+4. Try manual delivery: `hcom send @claude-instance -- test`
+
+### Hooks not working
+
+```bash
+# Re-install hooks
+hcom hooks remove claude
+hcom hooks add claude
+
+# Restart Claude
+```
+
+### Subagents not connecting
+
+1. Parent must be PTY-launched: `hcom claude`
+2. Check parent status: `hcom list` shows parent in `active` status during Task
+3. Subagent timeout: increase if tasks are slow
+
+```bash
+hcom config subagent_timeout 120
+```
+
+## Reference
+
+**Hook configuration:** `~/.claude/settings.json`
+
+**Settings path function:**
+```rust
+pub fn get_claude_settings_path() -> PathBuf
+```
+
+**Session binding:**
+- PTY mode: via process_id
+- Vanilla: via transcript marker
+- Fork: inherits parent binding
+
+**Exit codes:**
+- 0: Success / no output
+- 2: Message delivered (used internally)

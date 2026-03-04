@@ -1,0 +1,461 @@
+---
+title: Custom Workflow Scripts
+description: Create custom workflow scripts to orchestrate multi-agent tasks
+---
+
+## Overview
+
+Workflow scripts automate multi-agent orchestration patterns. They can launch agents, send messages, wait for events, and coordinate complex tasks.
+
+hcom supports both bash and Python scripts, discovered automatically from `~/.hcom/scripts/`.
+
+## Quick Start
+
+### Create a Script
+
+```bash
+# Create the scripts directory
+mkdir -p ~/.hcom/scripts
+
+# Create your script
+cat > ~/.hcom/scripts/notify.sh <<'EOF'
+#!/usr/bin/env bash
+# Send a notification to all agents
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: hcom run notify <message>"
+  exit 1
+fi
+
+message="$*"
+hcom send -- "[BROADCAST] $message"
+EOF
+
+# Make it executable
+chmod +x ~/.hcom/scripts/notify.sh
+```
+
+### Run Your Script
+
+```bash
+hcom run notify "Time for standup!"
+```
+
+## Script Template (Bash)
+
+Complete template with argument parsing and identity handling:
+
+```bash
+#!/usr/bin/env bash
+# Brief description shown in 'hcom run' list
+set -euo pipefail
+
+# Parse flags
+name_flag=""
+target=""
+timeout=60
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      echo "Usage: hcom run myscript [OPTIONS]"
+      echo ""
+      echo "Options:"
+      echo "  --target NAME    Target agent"
+      echo "  --timeout N      Timeout in seconds (default: 60)"
+      echo "  --name NAME      Your identity"
+      exit 0
+      ;;
+    --name)
+      name_flag="$2"
+      shift 2
+      ;;
+    --target)
+      target="$2"
+      shift 2
+      ;;
+    --timeout)
+      timeout="$2"
+      shift 2
+      ;;
+    *)
+      echo "Error: Unknown option: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# Build name arg for hcom commands
+name_arg=""
+[[ -n "$name_flag" ]] && name_arg="--name $name_flag"
+
+# Validate required args
+if [[ -z "$target" ]]; then
+  echo "Error: --target is required" >&2
+  exit 1
+fi
+
+# Your logic here
+hcom send "@${target}" $name_arg --intent request -- "Do the task"
+hcom events --wait "$timeout" $name_arg --from "$target"
+```
+
+## Identity Handling
+
+hcom automatically passes `--name <identity>` to scripts when invoked from inside an agent. Always parse and forward it:
+
+```bash
+name_flag=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --name) name_flag="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+name_arg=""
+[[ -n "$name_flag" ]] && name_arg="--name $name_flag"
+
+# Forward to all hcom commands
+hcom send @target $name_arg -- "message"
+hcom list self $name_arg --json
+```
+
+## Launching and Tracking Agents
+
+### Launch Output Parsing
+
+Launch commands output agent names in the format `Names: <name1>, <name2>`:
+
+```bash
+# Launch 3 agents
+launch_out=$(hcom 3 claude --tag worker --go --headless 2>&1)
+
+# Parse names
+names=$(echo "$launch_out" | grep '^Names: ' | sed 's/^Names: //')
+echo "Launched: $names"
+```
+
+### Cleanup Handler
+
+Track launched agents and clean them up on error:
+
+```bash
+LAUNCHED_NAMES=()
+
+track_launch() {
+  local output="$1"
+  local names
+  names=$(echo "$output" | grep '^Names: ' | sed 's/^Names: //' | tr ',' '\n' | xargs)
+  for n in $names; do
+    LAUNCHED_NAMES+=("$n")
+  done
+}
+
+cleanup() {
+  if [[ ${#LAUNCHED_NAMES[@]} -gt 0 ]]; then
+    echo "Cleaning up ${#LAUNCHED_NAMES[@]} agents..." >&2
+    for name in "${LAUNCHED_NAMES[@]}"; do
+      hcom stop "$name" --go 2>/dev/null || true
+    done
+  fi
+}
+
+trap cleanup ERR EXIT
+
+# Launch and track
+launch_out=$(hcom 1 claude --tag worker --go --headless 2>&1)
+track_launch "$launch_out"
+```
+
+### Background vs Interactive Launches
+
+```bash
+# Background (headless)
+hcom 1 claude --headless --tag worker --go
+# Agent runs in background, managed via TUI/CLI
+
+# Interactive terminal
+hcom 1 claude --tag worker --go
+# Opens new terminal window/tab
+
+# Current terminal (blocking)
+hcom claude
+# Runs in current terminal, blocks script
+```
+
+## Waiting for Events
+
+### Wait for Agent to Go Idle
+
+```bash
+# Launch agent with task
+hcom 1 claude --tag worker -p "analyze src/" --go --headless
+
+# Wait until it goes idle
+hcom events --wait 300 --idle worker-luna
+echo "Agent finished!"
+```
+
+### Wait for Message
+
+```bash
+# Ask agent a question
+hcom send @worker-luna --intent request -- "What is the main export?"
+
+# Wait for reply
+reply=$(hcom events --wait 60 \
+  --from worker-luna \
+  --type message \
+  --json | jq -r '.[0].data.text')
+
+echo "Answer: $reply"
+```
+
+### Wait for File Change
+
+```bash
+# Wait for agent to edit a specific file
+hcom events --wait 120 --file "src/auth.py" --agent codex-nova
+```
+
+## Example Workflows
+
+### Parallel Task Distribution
+
+```bash
+#!/usr/bin/env bash
+# Distribute tasks to N workers in parallel
+set -euo pipefail
+
+tasks=("task1" "task2" "task3")
+workers=3
+
+# Launch workers
+launch_out=$(hcom $workers claude --tag worker --go --headless 2>&1)
+names=$(echo "$launch_out" | grep '^Names: ' | sed 's/^Names: //' | tr ',' ' ')
+worker_arr=($names)
+
+# Assign tasks
+for i in "${!tasks[@]}"; do
+  worker="${worker_arr[$i % $workers]}"
+  task="${tasks[$i]}"
+  hcom send "@$worker" -- "Task: $task"
+done
+
+# Wait for all to finish
+for worker in "${worker_arr[@]}"; do
+  hcom events --wait 300 --idle "$worker"
+done
+
+echo "All tasks complete"
+```
+
+### Sequential Workflow with Handoff
+
+```bash
+#!/usr/bin/env bash
+# Stage 1: Research → Stage 2: Implementation
+set -euo pipefail
+
+# Stage 1: Launch researcher
+researcher=$(hcom 1 claude --tag researcher --go --headless \
+  -p "Research authentication patterns in src/" 2>&1 \
+  | grep '^Names: ' | sed 's/^Names: //')
+
+# Wait for research to complete
+hcom events --wait 300 --idle "$researcher"
+
+# Create bundle from research
+bundle=$(hcom bundle prepare --for "$researcher" --json \
+  | jq -r '.suggested_command')
+
+bundle_id=$(eval "$bundle --json" | jq -r '.id')
+
+# Stage 2: Launch implementer with research context
+implementer=$(hcom 1 claude --tag implementer --go --headless 2>&1 \
+  | grep '^Names: ' | sed 's/^Names: //')
+
+hcom send "@$implementer" --bundle "$bundle_id" \
+  -- "Implement auth based on research"
+
+# Wait for implementation
+hcom events --wait 600 --idle "$implementer"
+
+echo "Workflow complete"
+```
+
+### Agent Self-Evaluation
+
+From the bundled `confess.sh` script:
+
+```bash
+# Launch agent to review its own transcript
+eval_prompt="Read your recent transcript and write a brutally honest self-evaluation.
+What did you do well? What mistakes did you make? What would you do differently?
+
+Run: hcom send @judge -- <your evaluation>
+Then: hcom stop"
+
+eval_agent=$(hcom 1 claude --tag eval --go --headless \
+  -p "$eval_prompt" 2>&1 | grep '^Names: ' | sed 's/^Names: //')
+
+# Launch independent reviewer
+reviewer=$(hcom 1 claude --tag reviewer --go --headless 2>&1 \
+  | grep '^Names: ' | sed 's/^Names: //')
+
+hcom send "@$reviewer" -- "Read transcript of $eval_agent. 
+Write an independent assessment. Send to @judge."
+
+# Launch judge to compare
+judge=$(hcom 1 claude --tag judge --go --headless \
+  -p "Wait for two evaluations, then send verdict to @$eval_agent" 2>&1 \
+  | grep '^Names: ' | sed 's/^Names: //')
+```
+
+## Python Scripts
+
+hcom supports Python scripts alongside bash:
+
+```python
+#!/usr/bin/env python3
+# Send structured data to an agent
+
+import sys
+import json
+import subprocess
+import argparse
+
+def run_hcom(cmd: list[str]) -> str:
+    """Run hcom command and return output."""
+    result = subprocess.run(
+        ['hcom'] + cmd,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    return result.stdout
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--name', help='Your identity')
+    parser.add_argument('--target', required=True)
+    parser.add_argument('--data', required=True, help='JSON data')
+    args = parser.parse_args()
+
+    # Parse and validate JSON
+    data = json.loads(args.data)
+
+    # Build message
+    message = f"Data package:\n```json\n{json.dumps(data, indent=2)}\n```"
+
+    # Send via hcom
+    cmd = ['send', f'@{args.target}', '--']
+    if args.name:
+        cmd.extend(['--name', args.name])
+    cmd.append(message)
+
+    run_hcom(cmd)
+    print(f"Sent to {args.target}")
+
+if __name__ == '__main__':
+    main()
+```
+
+Usage:
+
+```bash
+chmod +x ~/.hcom/scripts/send-data.py
+
+hcom run send-data --target worker-luna --data '{"task": "analyze", "file": "auth.py"}'
+```
+
+## Script Discovery
+
+**User scripts:** `~/.hcom/scripts/*.{sh,py}`
+
+**Bundled scripts:** Built into hcom binary
+- `confess` - Agent self-evaluation
+- `debate` - Multi-agent debate
+- `fatcow` - Codebase oracle
+
+### View Script Source
+
+```bash
+# View any script source
+hcom run confess --source
+hcom run debate --source
+
+# User scripts
+cat ~/.hcom/scripts/myscript.sh
+```
+
+### List Available Scripts
+
+```bash
+hcom run
+```
+
+Shows all scripts with their description (from line 2 comment).
+
+## Best Practices
+
+1. **Always handle `--name` flag** - Required for scripts to work from inside agents
+2. **Use `--go` flag** - Skip confirmation prompts in automated workflows
+3. **Set `--headless`** - Launch background agents for automation
+4. **Track launched agents** - Use cleanup handlers to avoid orphans
+5. **Set timeouts** - Prevent infinite waits with `--wait` timeout
+6. **Use tags** - Group related agents with `--tag` for batch operations
+7. **Validate inputs** - Check required arguments before launching agents
+8. **Forward name_arg** - Always pass `$name_arg` to hcom commands
+9. **Handle errors** - Use `set -euo pipefail` and trap cleanup
+10. **Add help text** - Include usage in `--help` handler
+
+## Advanced Patterns
+
+### Dynamic Agent Pool
+
+```bash
+# Maintain a pool of workers, spawn more if needed
+min_idle=2
+
+while true; do
+  idle_count=$(hcom list --json | jq '[.[] | select(.status=="listening")] | length')
+
+  if [[ $idle_count -lt $min_idle ]]; then
+    needed=$((min_idle - idle_count))
+    hcom $needed claude --tag worker --go --headless
+  fi
+
+  sleep 10
+done
+```
+
+### Subscribe and React
+
+```bash
+# Subscribe to file collisions and notify a reviewer
+sub_id=$(hcom events sub --collision --json | jq -r '.id')
+
+while true; do
+  event=$(hcom events --wait 3600 --collision --json)
+  file=$(echo "$event" | jq -r '.[0].data.file')
+  agents=$(echo "$event" | jq -r '.[0].data.agents | join(", ")')
+
+  hcom send @reviewer -- "Collision detected: $file edited by $agents"
+done
+```
+
+## Documentation
+
+```bash
+# Full CLI reference
+hcom run docs --cli
+
+# Config settings
+hcom run docs --config
+
+# Script creation guide
+hcom run docs --scripts
+```

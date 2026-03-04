@@ -1,0 +1,455 @@
+---
+title: 'hcom hooks'
+description: 'Manage tool hooks for automatic message delivery'
+---
+
+## Overview
+
+The `hcom hooks` command manages hook installation across Claude Code, Gemini CLI, Codex, and OpenCode. Hooks enable automatic message delivery and status tracking without manual polling.
+
+## Basic Usage
+
+```bash
+# Show hook status
+hcom hooks
+hcom hooks status
+
+# Add hooks
+hcom hooks add
+hcom hooks add claude
+hcom hooks add all
+
+# Remove hooks
+hcom hooks remove
+hcom hooks remove gemini
+hcom hooks remove all
+```
+
+## Hook Status
+
+View installation status for all tools.
+
+```bash
+hcom hooks
+```
+
+**Output:**
+```
+claude:  installed    (/home/user/.claude/settings.json)
+gemini:  installed    (/home/user/.gemini/settings.json)
+codex:   not installed
+opencode: installed    (/home/user/.config/opencode/plugins/hcom.ts)
+```
+
+## Add Hooks
+
+### Auto-detect Current Tool
+
+```bash
+# Run inside AI tool
+hcom hooks add
+```
+
+Detects and installs hooks for:
+- Claude Code (via `CLAUDE_CODE_ENTRYPOINT`)
+- Gemini CLI (via `GEMINI_CLI_ENTRYPOINT`)
+- Codex (via `CODEX_CLI_ENTRYPOINT`)
+- OpenCode (via `OPENCODE=1`)
+
+### Specific Tool
+
+```bash
+# Claude
+hcom hooks add claude
+
+# Gemini
+hcom hooks add gemini
+
+# Codex
+hcom hooks add codex
+
+# OpenCode
+hcom hooks add opencode
+```
+
+### All Tools
+
+```bash
+# Install hooks for all detected tools
+hcom hooks add all
+```
+
+**Output:**
+```
+Added claude hooks  (/home/user/.claude/settings.json)
+Added gemini hooks  (/home/user/.gemini/settings.json)
+Failed to add codex hooks
+Added opencode hooks  (/home/user/.config/opencode/plugins/hcom.ts)
+
+Restart the tool(s) to activate hooks.
+```
+
+## Remove Hooks
+
+### All Tools (default)
+
+```bash
+# Remove all hooks
+hcom hooks remove
+hcom hooks remove all
+```
+
+### Specific Tool
+
+```bash
+# Remove Claude hooks
+hcom hooks remove claude
+
+# Remove Gemini hooks
+hcom hooks remove gemini
+
+# Remove Codex hooks
+hcom hooks remove codex
+
+# Remove OpenCode hooks
+hcom hooks remove opencode
+```
+
+**Output:**
+```
+Removed claude hooks
+Removed gemini hooks
+```
+
+## What Hooks Do
+
+### Claude Code
+
+**Location:** `~/.claude/settings.json`
+
+**Hooks:**
+- `setup` - Connect to hcom on launch
+- `start` - Deliver pending messages at start of turn
+- `stop` - Notify idle status, wait for messages
+- `end` - Disconnect on exit
+
+**Enabled events:**
+- Automatic message delivery
+- Status tracking (active/listening/blocked)
+- Command execution tracking
+- File edit notifications
+
+### Gemini CLI
+
+**Location:** `~/.gemini/settings.json`
+
+**Hooks:**
+- `setup` - Connect to hcom on launch
+- `start` - Deliver pending messages at start of turn
+- `stop` - Notify idle status, wait for messages
+- `end` - Disconnect on exit
+
+**Enabled events:**
+- Message delivery
+- Status tracking
+- Tool use tracking
+
+### Codex
+
+**Location:** `~/.codex/config.toml` + `~/.codex/rules/hcom.rules`
+
+**Hooks:**
+- `on_start` - Connect via codex-notify
+- `on_turn_start` - Deliver messages
+- `on_turn_end` - Status updates
+- `on_exit` - Disconnect
+
+**ExecPolicy rules:**
+```
+action = "auto_approve"
+command = "codex-notify"
+```
+
+### OpenCode
+
+**Location:** `~/.config/opencode/plugins/hcom.ts`
+
+**Plugin hooks:**
+- `onLoad` - Connect to hcom
+- `beforeTurn` - Deliver messages
+- `afterTurn` - Status updates
+- `onExit` - Disconnect
+
+**Features:**
+- Native TypeScript integration
+- Event subscriptions
+- Message formatting
+
+## Hook Verification
+
+### Claude
+
+```bash
+# Check settings.json
+cat ~/.claude/settings.json | grep hcom
+
+# Verify hooks
+hcom hooks | grep claude
+```
+
+**Expected:**
+```json
+{
+  "hooks": {
+    "setup": "hcom start",
+    "start": "hcom listen 1",
+    "stop": "hcom listen",
+    "end": "hcom stop"
+  }
+}
+```
+
+### Gemini
+
+```bash
+# Check settings.json
+cat ~/.gemini/settings.json | grep hcom
+
+# Verify hooks
+hcom hooks | grep gemini
+```
+
+### Codex
+
+```bash
+# Check config
+cat ~/.codex/config.toml | grep codex-notify
+
+# Check rules
+cat ~/.codex/rules/hcom.rules
+
+# Verify
+hcom hooks | grep codex
+```
+
+### OpenCode
+
+```bash
+# Check plugin
+ls ~/.config/opencode/plugins/hcom.ts
+
+# Verify
+hcom hooks | grep opencode
+```
+
+## Auto-Approve Integration
+
+Hooks respect the `HCOM_AUTO_APPROVE` config setting.
+
+```bash
+# Enable auto-approve for safe commands
+hcom config auto_approve 1
+
+# Update hooks to reflect change
+hcom hooks add claude
+```
+
+**Safe commands (auto-approved):**
+- send, start, list, events, listen, relay, config, transcript, archive, status, help
+
+**Always require approval:**
+- reset, stop, launches
+
+## Troubleshooting
+
+### Hooks Not Working
+
+**Verify installation:**
+```bash
+hcom hooks
+```
+
+**Reinstall:**
+```bash
+hcom hooks remove claude
+hcom hooks add claude
+```
+
+**Check file permissions:**
+```bash
+ls -l ~/.claude/settings.json
+chmod 644 ~/.claude/settings.json
+```
+
+### Messages Not Delivered
+
+**Check hook execution:**
+```bash
+# Inside Claude/Gemini
+hcom start  # Should show "Connected as <name>"
+hcom listen 1  # Should show messages or timeout
+```
+
+**Check logs:**
+```bash
+hcom status --logs
+```
+
+### Codex ExecPolicy Errors
+
+**Verify rules file:**
+```bash
+cat ~/.codex/rules/hcom.rules
+```
+
+**Expected content:**
+```toml
+[[rule]]
+action = "auto_approve"
+command = "codex-notify"
+```
+
+**Reload Codex:**
+```bash
+# Restart Codex after adding rules
+codex --help  # Forces config reload
+```
+
+### OpenCode Plugin Not Loading
+
+**Check plugin path:**
+```bash
+ls ~/.config/opencode/plugins/hcom.ts
+```
+
+**Verify TypeScript syntax:**
+```bash
+tsc --noEmit ~/.config/opencode/plugins/hcom.ts
+```
+
+**Reload OpenCode:**
+```bash
+# Restart OpenCode after adding plugin
+opencode --reload-plugins
+```
+
+## Ad-hoc Mode (No Hooks)
+
+You can use hcom without hooks in any AI tool:
+
+```bash
+# Connect manually
+hcom start
+
+# Check messages
+hcom listen 1
+
+# Disconnect
+hcom stop
+```
+
+**Limitations:**
+- No automatic message delivery
+- Manual polling required
+- No status tracking
+- No tool use notifications
+
+## Environment Detection
+
+Hooks auto-detect the current tool via environment variables:
+
+**Claude Code:**
+```bash
+CLAUDE_CODE_ENTRYPOINT=/path/to/claude
+```
+
+**Gemini CLI:**
+```bash
+GEMINI_CLI_ENTRYPOINT=/path/to/gemini
+```
+
+**Codex:**
+```bash
+CODEX_CLI_ENTRYPOINT=/path/to/codex
+```
+
+**OpenCode:**
+```bash
+OPENCODE=1
+```
+
+## Examples
+
+### First-time Setup
+
+```bash
+# Install all hooks
+hcom hooks add all
+
+# Verify
+hcom hooks
+
+# Restart tools
+```
+
+### Tool-specific Setup
+
+```bash
+# Claude only
+hcom hooks add claude
+
+# Verify Claude restart
+claude --version
+hcom 1 claude  # Test launch
+```
+
+### Remove and Reinstall
+
+```bash
+# Clean install
+hcom hooks remove all
+hcom hooks add all
+
+# Restart tools
+```
+
+### Sandbox Mode
+
+```bash
+# Project-local hooks
+export HCOM_DIR="$PWD/.hcom"
+hcom hooks add claude
+
+# Hooks install under $PWD/.claude/
+```
+
+## Hook Files
+
+### Global Locations (default)
+
+- Claude: `~/.claude/settings.json`
+- Gemini: `~/.gemini/settings.json`
+- Codex: `~/.codex/config.toml`, `~/.codex/rules/hcom.rules`
+- OpenCode: `~/.config/opencode/plugins/hcom.ts`
+
+### Local Locations (HCOM_DIR set)
+
+- Claude: `$PWD/.claude/settings.json`
+- Gemini: `$PWD/.gemini/settings.json`
+- Codex: `$PWD/.codex/config.toml`, `$PWD/.codex/rules/hcom.rules`
+- OpenCode: `~/.config/opencode/plugins/hcom.ts` (always global)
+
+## Tips
+
+- Always restart the tool after adding/removing hooks
+- Use `hcom status` to verify hook installation
+- Enable `auto_approve` for smoother workflow
+- Remove hooks cleanly with `hcom hooks remove`
+- Use ad-hoc mode if hooks can't be installed
+- Check logs if hooks aren't working
+
+## See Also
+
+- [hcom config](/cli/config) - Auto-approve settings
+- [hcom status](/cli/status) - Verify hook installation
+- [hcom start](/cli/start) - Manual connection

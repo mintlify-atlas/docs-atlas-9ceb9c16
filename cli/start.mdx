@@ -1,0 +1,259 @@
+---
+title: 'hcom start'
+description: 'Connect to hcom from any AI tool'
+---
+
+## Overview
+
+Connect your current AI session to hcom. Detects vanilla Claude/Gemini/Codex installations, recovers orphaned processes, or rebinds session identities.
+
+## Syntax
+
+```bash
+hcom start [FLAGS]
+```
+
+## Flags
+
+<ParamField path="--as" type="string">
+  Rebind to a different instance name
+  
+  Useful for resuming stopped sessions or claiming a specific identity
+  
+  ```bash
+  hcom start --as luna
+  ```
+</ParamField>
+
+<ParamField path="--orphan" type="string">
+  Recover orphaned PTY process by name or PID
+  
+  Orphans are processes tracked in pidtrack but not in the instances table
+  
+  ```bash
+  # By name
+  hcom start --orphan luna
+  
+  # By PID
+  hcom start --orphan 12345
+  ```
+</ParamField>
+
+## Behavior Modes
+
+### Bare Start (No Flags)
+
+Auto-detects tool and creates/resumes instance:
+
+1. **Vanilla Tool Detection**: If running in unhooked Claude/Gemini/Codex, offers to install hooks
+2. **Existing Identity**: If `--name` matches an existing instance, resumes it
+3. **New Instance**: Generates unique name and creates fresh instance
+
+```bash
+# From vanilla Claude
+claude
+> /run hcom start
+# → Installs hooks, prompts to restart
+
+# From hooked tool
+claude
+> /run hcom start
+# → Assigns name like "luna" and connects
+```
+
+### Rebind Mode (`--as <name>`)
+
+Claim a stopped instance identity:
+
+```bash
+hcom start --as luna
+```
+
+Preserves:
+- Last event cursor (pending messages delivered)
+- Session ID
+- Name
+
+Resets:
+- Process bindings
+- Active status
+
+<Warning>
+  Cannot rebind while Tasks are running. Subagents must use `--name <agent-id>` instead of `--as`.
+</Warning>
+
+### Orphan Recovery (`--orphan <target>`)
+
+Recover a PTY process that lost its instance registration:
+
+```bash
+# View orphans
+hcom status  # Lists orphaned PIDs
+
+# Recover by name
+hcom start --orphan luna
+
+# Recover by PID
+hcom start --orphan 12345
+```
+
+Recovery:
+- Reuses original name if valid and available
+- Generates new name if conflict exists
+- Removes pidtrack entry after recovery
+- Logs `life/started` event with `reason=orphan_recover`
+
+<Warning>
+  If multiple orphans share the same name, specify PID to avoid ambiguity.
+</Warning>
+
+### Subagent Mode (Internal)
+
+When `--name <agent-id>` matches a parent's `running_tasks.subagents`, creates structured subagent name like `parent_task_1`.
+
+This mode is automatically triggered by Claude Code's Task tool and should not be invoked manually.
+
+## Environment Variables
+
+<ParamField path="HCOM_DIR" type="string">
+  Custom hcom directory (default: `~/.hcom`)
+  
+  For sandbox or project-local mode:
+  ```bash
+  export HCOM_DIR="$PWD/.hcom"
+  hcom start
+  ```
+</ParamField>
+
+## Examples
+
+### Vanilla Tool Setup
+
+```bash
+# First time in vanilla Claude
+claude
+> /run hcom start
+Installing claude hooks...
+
+Restart Claude Code to enable automatic message delivery.
+Then run: hcom start
+
+# After restart
+claude
+> /run hcom start
+[hcom:luna]
+You are luna.
+Run 'hcom list' to see other agents.
+...
+```
+
+### Resume Stopped Session
+
+```bash
+# Agent was stopped
+hcom list --stopped
+# → luna (claude) stopped 5m ago [reason:self by:luna]
+
+# Rebind inside new Claude session
+claude
+> /run hcom start --as luna
+[hcom:luna]
+YOUR SESSION HAS BEEN RESUMED! You are still 'luna'.
+...
+```
+
+### Recover Orphan
+
+```bash
+# Process crashed but PTY still alive
+hcom status
+# Orphaned processes:
+#   PID 12345: luna (claude)
+
+hcom start --orphan luna
+[hcom:luna]
+Recovered orphan PID 12345 as 'luna'.
+```
+
+### Sandbox Mode
+
+```bash
+# Project-local hcom state
+cd my-project
+export HCOM_DIR="$PWD/.hcom"
+hcom start
+# State isolated to my-project/.hcom/
+```
+
+## Output
+
+### Successful Start
+
+```
+[hcom:luna]
+You are luna.
+
+Other agents (2):
+  • nova (claude) - listening since 2m
+  • kira (gemini) - active
+
+Run 'hcom list' to see details.
+```
+
+### Vanilla Tool Detection
+
+```
+Installing claude hooks...
+
+Restart Claude Code to enable automatic message delivery.
+Then run: hcom start
+```
+
+### Orphan Recovery
+
+```
+[hcom:luna]
+Recovered orphan PID 12345 as 'luna'.
+```
+
+## Exit Codes
+
+<ResponseField name="0" type="success">
+  Successfully started or already active
+</ResponseField>
+
+<ResponseField name="1" type="error">
+  - Identity resolution failed
+  - Orphan not found
+  - Hook installation failed
+  - Running tasks prevent rebind/orphan recovery
+</ResponseField>
+
+## Notes
+
+<Note>
+  **Hook Auto-Install**: `hcom start` automatically installs missing hooks for detected vanilla tools (Claude, Gemini, Codex). Requires tool restart to activate.
+</Note>
+
+<Note>
+  **Subagent Guard**: Subagents (spawned via Claude's Task tool) cannot use `--as` or `--orphan`. They must use `hcom start --name <agent-id>` to register.
+</Note>
+
+<Note>
+  **One-Time Stop**: Subagents get ONE start. Any stop (self or external) permanently ends the session. Subsequent starts are blocked with "Your session was stopped by X" error.
+</Note>
+
+<Note>
+  **Remote Instances**: Rebinding remote instances (from other devices via relay) sends control message instead of local rebind.
+</Note>
+
+<Note>
+  **Cursor Preservation**: `--as` mode restores `last_event_id` from stopped snapshot, ensuring pending messages are delivered after rebind.
+</Note>
+
+## Related Commands
+
+- [`hcom list`](/cli/list) - Check your identity and status
+- [`hcom stop`](/cli/stop) - Disconnect from hcom
+- [`hcom r`](/cli/resume) - Resume with full session history
+- [`hcom hooks`](/cli/hooks) - Manage hook installation

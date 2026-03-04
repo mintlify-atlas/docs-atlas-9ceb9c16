@@ -1,0 +1,327 @@
+---
+title: 'hcom f'
+description: 'Fork agent sessions'
+---
+
+## Overview
+
+Fork an agent by cloning its session history into a new independent agent. Works with both active and stopped instances. Alias for `hcom fork`.
+
+## Syntax
+
+```bash
+hcom f <NAME> [TOOL_ARGS]
+```
+
+<ParamField path="NAME" type="string" required>
+  Name of instance to fork (active or stopped)
+  
+  The source agent continues running (if active)
+</ParamField>
+
+<ParamField path="TOOL_ARGS" type="string[]" optional>
+  Tool-specific arguments to override or merge with original launch args
+  
+  ```bash
+  hcom f luna --model opus
+  ```
+</ParamField>
+
+## Flags
+
+<ParamField path="--tag" type="string">
+  Tag for forked agent
+  
+  ```bash
+  hcom f luna --tag clone
+  ```
+</ParamField>
+
+<ParamField path="--terminal" type="string">
+  Terminal preset for forked agent
+  
+  ```bash
+  hcom f luna --terminal tmux
+  ```
+</ParamField>
+
+<ParamField path="--go" type="boolean">
+  Skip confirmation (when applicable)
+</ParamField>
+
+<ParamField path="--name" type="string">
+  Launcher identity (who initiated fork)
+</ParamField>
+
+## What Gets Cloned
+
+### From Source Agent
+
+- **Session History** - Full conversation up to fork point
+- **Tool** - Same tool (claude/gemini/codex/opencode)
+- **Launch Args** - Original arguments (merged with new args)
+- **Tag** - Original tag (unless overridden)
+- **Background Mode** - Headless vs interactive setting
+
+### What's New
+
+- **Instance Name** - Fresh unique name (e.g., `nova` if source was `luna`)
+- **Process ID** - Independent OS process
+- **Terminal Window** - New pane/tab/window
+- **Event Cursor** - Starts from current max (no pending messages)
+- **Bootstrap** - Includes "YOU ARE A FORK" message
+
+## Tool-Specific Behavior
+
+### Claude
+
+Uses `--resume <session-id> --fork-session`:
+
+```bash
+hcom f luna
+# Launches: claude --resume sess_abc123 --fork-session
+```
+
+Claude creates a new session ID derived from the original, preserving history but allowing divergence.
+
+### Gemini
+
+Uses `--resume <session-id>`:
+
+```bash
+hcom f nova
+# Error: Gemini does not support session forking
+```
+
+<Warning>
+  **Gemini**: Does not support forking. Attempting to fork a Gemini agent fails with tool limitation error.
+</Warning>
+
+### Codex
+
+Uses `fork` subcommand:
+
+```bash
+hcom f kira
+# Launches: codex fork sess_ghi789
+```
+
+### OpenCode
+
+Uses `--session <session-id> --fork`:
+
+```bash
+hcom f zeus
+# Launches: opencode --session sess_jkl012 --fork
+```
+
+## Fork vs Resume
+
+| Feature | Resume (`hcom r`) | Fork (`hcom f`) |
+|---------|-------------------|------------------|
+| Source | Stopped only | Active or stopped |
+| Identity | Same name | New name |
+| Cursor | Restored (pending msgs) | Fresh (no pending) |
+| Original | Replaced | Continues |
+| Bootstrap | "RESUMED" | "YOU ARE A FORK" |
+
+## Examples
+
+### Basic Fork
+
+```bash
+# Fork active agent
+hcom f luna
+# Output: Forked luna (claude)
+
+# New agent sees:
+# [hcom:nova]
+# YOU ARE A FORK of agent 'luna'.
+# You have the same session history but are a NEW agent.
+# Run hcom start to get your own identity.
+# ...
+```
+
+### Fork with Model Override
+
+```bash
+hcom f luna --model opus
+# Clone gets opus, source keeps original model
+```
+
+### Fork with Tag
+
+```bash
+hcom f luna --tag experiment
+# Creates experiment-nova (or next available name)
+```
+
+### Fork Stopped Agent
+
+```bash
+# Agent is stopped
+hcom list --stopped luna
+# Output: luna (claude) stopped 5m ago
+
+# Fork it
+hcom f luna
+# Output: Forked luna (claude)
+# Creates new agent with luna's history
+```
+
+### Fork Headless
+
+```bash
+hcom f luna -p "Analyze from different angle"
+# Creates headless fork with custom prompt
+```
+
+### Self-Fork Pattern
+
+```bash
+# From inside agent luna
+hcom f luna --tag clone
+# Creates clone of yourself for parallel work
+
+# Then message the clone
+hcom send @clone -- Investigate the bug while I work on tests
+```
+
+### Multi-Fork Workflow
+
+```bash
+# Create multiple forks for parallel tasks
+hcom f luna --tag review-1
+hcom f luna --tag review-2  
+hcom f luna --tag review-3
+
+# Each gets full history, diverges independently
+hcom send @review-1 -- Review auth.py
+hcom send @review-2 -- Review api.py
+hcom send @review-3 -- Review db.py
+```
+
+## Error Cases
+
+### No Session ID
+
+```bash
+hcom f adhoc-agent
+# Error: No session ID found for 'adhoc-agent' — cannot fork
+```
+
+Solution: Only agents with session history can be forked. Ad-hoc instances have no session.
+
+### Gemini Limitation
+
+```bash
+hcom f nova  # nova is gemini
+# Error: Gemini CLI does not support session forking
+```
+
+Solution: Use Claude, Codex, or OpenCode for fork workflows.
+
+### Not Found
+
+```bash
+hcom f nonexistent
+# Error: No stopped snapshot found for 'nonexistent'
+```
+
+Solution:
+```bash
+hcom list --stopped  # Check stopped
+hcom list            # Check active
+```
+
+## Exit Codes
+
+<ResponseField name="0" type="success">
+  Fork launched successfully
+</ResponseField>
+
+<ResponseField name="1" type="error">
+  - No session ID found
+  - Tool doesn't support forking (Gemini)
+  - Instance not found
+  - Launch failed
+</ResponseField>
+
+## Notes
+
+<Note>
+  **Source Unaffected**: Forking does NOT stop or modify the source agent. Both run independently after fork.
+</Note>
+
+<Note>
+  **Fresh Cursor**: Unlike resume, fork starts with a fresh event cursor. No pending messages are delivered to the fork.
+</Note>
+
+<Note>
+  **Bootstrap Message**: Fork sees "YOU ARE A FORK of agent 'X'" in system prompt, making the relationship clear.
+</Note>
+
+<Note>
+  **Gemini Limitation**: Gemini CLI does not support `--fork` or equivalent. Fork fails for Gemini agents.
+</Note>
+
+<Note>
+  **Name Generation**: Fork gets a unique name from the pool (luna → nova, kira, etc.). Cannot specify custom name.
+</Note>
+
+<Note>
+  **Argument Merging**: Original launch args merge with fork args. New args override conflicting flags.
+</Note>
+
+<Note>
+  **Tag Override**: `--tag` creates a tagged fork. Without `--tag`, fork inherits source's tag (if any).
+</Note>
+
+## Use Cases
+
+### Parallel Investigation
+
+Fork an agent to explore different hypotheses simultaneously:
+
+```bash
+hcom f researcher --tag hypothesis-a
+hcom f researcher --tag hypothesis-b
+```
+
+### Code Review Split
+
+Fork reviewer for parallel file reviews:
+
+```bash
+for file in auth.py api.py db.py; do
+  hcom f reviewer --tag "review-$file" --hcom-prompt "Review $file"
+done
+```
+
+### Safe Experimentation
+
+Fork before risky operations:
+
+```bash
+# Fork yourself before dangerous refactor
+hcom f luna --tag backup
+
+# Work in original, rollback to fork if needed
+```
+
+### Workflow Handoff
+
+Fork to hand off context:
+
+```bash
+# Luna completes research phase
+hcom f luna --tag implementer
+hcom send @implementer -- Implement based on research
+```
+
+## Related Commands
+
+- [`hcom r`](/cli/resume) - Resume stopped agents (same identity)
+- [`hcom list`](/cli/list) - View active agents
+- [`hcom list --stopped`](/cli/list) - View stopped instances
+- [`hcom send`](/cli/send) - Message forked agents

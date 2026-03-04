@@ -1,0 +1,392 @@
+---
+title: 'hcom status'
+description: 'System health overview and diagnostics'
+---
+
+## Overview
+
+The `hcom status` command provides a comprehensive health check of your hcom installation, including version info, directory status, config validity, tool hooks, terminal presets, active agents, relay connectivity, and logs.
+
+## Basic Usage
+
+```bash
+# Show system status
+hcom status
+
+# JSON output
+hcom status --json
+
+# Include recent log entries
+hcom status --logs
+```
+
+## Output Sections
+
+### Version
+
+Current hcom version.
+
+```
+hcom 0.7.0
+```
+
+### Directory Status
+
+HCOM_DIR location and write access.
+
+```
+dir:       /home/user/.hcom (ok)
+```
+
+**States:**
+- `ok` - Directory exists and is writable
+- `read-only` - Directory exists but not writable
+- `missing` - Directory does not exist
+
+**With HCOM_DIR override:**
+```
+dir:       /home/user/project/.hcom (ok)
+           HCOM_DIR=/home/user/project/.hcom
+```
+
+### Config Validity
+
+Configuration file parse status.
+
+```
+config:    ✓ valid
+```
+
+**States:**
+- `✓ valid` - config.toml parses successfully
+- `✗ invalid` - Parse errors (shown with `--logs`)
+
+### Tool Hooks
+
+Installation status for each AI tool.
+
+```
+tools:     Claude ✓  Gemini ✓  Codex ✗  OpenCode ~
+```
+
+**Symbols:**
+- `✓` - Binary installed and hooks configured
+- `~` - Binary installed but hooks not configured
+- `✗` - Binary not installed
+
+### Terminal Preset
+
+Configured terminal emulator for spawning agents.
+
+```
+terminal:  kitty ✓
+```
+
+**Examples:**
+- `default` - Auto-detect
+- `kitty ✓` - Available and ready
+- `wezterm ✗` - Configured but not available
+- `custom` - Custom command
+
+### Agents
+
+Count of running agents by status.
+
+```
+agents:    3 active, 2 listening, 1 blocked
+```
+
+**Status types:**
+- `active` - Processing
+- `listening` - Idle, ready
+- `blocked` - Needs approval
+- `inactive` - Dead or stale
+- `error` - Error state
+- `launching` - Starting up
+
+**When no agents:**
+```
+agents:    none
+```
+
+### Relay
+
+Cross-device sync status.
+
+```
+relay:     connected
+```
+
+**States:**
+- `connected` - MQTT connection active
+- `error (reason)` - Connection failed
+- `enabled (not synced)` - Enabled but no recent sync
+- `disabled` - Sync disabled
+- `not configured` - No relay setup
+
+**Worker process (when relay enabled):**
+```
+relay-worker: running (PID 12345)
+relay-worker: not running
+```
+
+### Logs
+
+Recent error/warning count (1 hour window).
+
+```
+logs:      ✓ ok
+```
+
+**With issues:**
+```
+logs:      2 errors, 5 warns (1h)
+```
+
+**With `--logs` flag:**
+```
+logs:      2 errors, 5 warns (1h)
+           /home/user/.hcom/.tmp/logs/hcom.log
+           15:30:45 [ERROR] relay.connect
+           15:28:12 [WARN ] hooks.verify
+```
+
+## JSON Output
+
+```bash
+hcom status --json
+```
+
+```json
+{
+  "version": {
+    "current": "0.7.0",
+    "latest": null,
+    "update_available": false,
+    "update_cmd": null
+  },
+  "hcom_dir": "/home/user/.hcom",
+  "hcom_dir_override": false,
+  "hcom_exists": true,
+  "hcom_writable": true,
+  "project_root": "/home/user/project",
+  "config_valid": true,
+  "config_errors": [],
+  "tools": {
+    "claude": {
+      "installed": true,
+      "hooks": true,
+      "settings_path": "/home/user/.claude/settings.json"
+    },
+    "gemini": {
+      "installed": true,
+      "hooks": true,
+      "settings_path": "/home/user/.gemini/settings.json"
+    },
+    "codex": {
+      "installed": false,
+      "hooks": false,
+      "settings_path": "/home/user/.codex/config.toml"
+    },
+    "opencode": {
+      "installed": true,
+      "hooks": false
+    }
+  },
+  "terminal": {
+    "config": "kitty",
+    "available": true
+  },
+  "instances": {
+    "active": 2,
+    "listening": 3,
+    "blocked": 1,
+    "error": 0,
+    "launching": 0,
+    "inactive": 0,
+    "total": 6
+  },
+  "relay": {
+    "configured": true,
+    "enabled": true,
+    "status": "ok",
+    "error": null,
+    "last_push": 1709566845.0,
+    "broker": "mqtts://broker.emqx.io:8883"
+  },
+  "delivery": {},
+  "logs": {
+    "error_count": 0,
+    "warn_count": 2,
+    "last_error": null,
+    "entries": []
+  }
+}
+```
+
+## Use Cases
+
+### Installation Verification
+
+```bash
+# Check after install
+hcom status
+
+# Verify hooks for specific tool
+hcom status | grep "Claude ✓"
+```
+
+### Troubleshooting
+
+```bash
+# Full diagnostic with logs
+hcom status --logs
+
+# JSON for automation
+hcom status --json | jq '.tools.claude.hooks'
+
+# Check relay issues
+hcom status | grep relay
+```
+
+### Monitoring
+
+```bash
+# Watch for changes
+watch -n 5 hcom status
+
+# Alert on errors
+if hcom status --json | jq -e '.logs.error_count > 0'; then
+  echo "Errors detected!"
+fi
+```
+
+### CI/CD Integration
+
+```bash
+#!/bin/bash
+# Pre-flight check
+if ! hcom status --json | jq -e '.config_valid and .hcom_writable'; then
+  echo "hcom not ready"
+  exit 1
+fi
+```
+
+## Diagnostics
+
+### Directory Issues
+
+**Read-only:**
+```
+dir:       /home/user/.hcom (read-only)
+```
+
+**Solution:** Check permissions, disk space, or use `HCOM_DIR`.
+
+**Missing:**
+```
+dir:       /home/user/.hcom (missing)
+```
+
+**Solution:** Run `hcom start` or any command to auto-create.
+
+### Config Errors
+
+```
+config:    ✗ invalid
+```
+
+**Solution:**
+```bash
+# View errors
+hcom status --logs
+
+# Edit config
+hcom config --edit
+
+# Reset to defaults
+hcom config --reset
+```
+
+### Hook Verification
+
+```
+tools:     Claude ~  ...
+```
+
+**Solution:**
+```bash
+# Add hooks
+hcom hooks add claude
+
+# Verify
+hcom hooks status
+```
+
+### Terminal Issues
+
+```
+terminal:  wezterm ✗
+```
+
+**Solution:**
+```bash
+# Check available
+hcom config terminal --info
+
+# Change preset
+hcom config terminal kitty
+
+# Reset to auto-detect
+hcom config terminal default
+```
+
+### Relay Issues
+
+```
+relay:     error (broker unreachable)
+```
+
+**Solution:**
+```bash
+# Check relay status
+hcom relay
+
+# Test brokers
+hcom relay new
+
+# Reconnect
+hcom relay connect
+```
+
+### Log Analysis
+
+```bash
+# Show recent errors
+hcom status --logs
+
+# Full log file
+tail -f ~/.hcom/.tmp/logs/hcom.log
+
+# Filter by subsystem
+grep 'relay' ~/.hcom/.tmp/logs/hcom.log
+```
+
+## Exit Codes
+
+- `0` - Always returns 0 (diagnostic tool)
+
+## Tips
+
+- Run after install to verify setup
+- Use `--json` for scripting
+- Add `--logs` when troubleshooting
+- Check before launching agents
+- Monitor relay status for cross-device sync
+- Review logs periodically
+
+## See Also
+
+- [hcom hooks](/cli/hooks) - Manage tool hooks
+- [hcom config](/cli/config) - Configuration
+- [hcom relay](/cli/relay) - Cross-device sync

@@ -1,0 +1,466 @@
+---
+title: MQTT Relay Setup
+description: Connect agents across machines with MQTT relay synchronization
+---
+
+## Overview
+
+The MQTT relay enables hcom instances on different machines to communicate. Messages, events, and state sync in real-time across devices.
+
+Use cases:
+- Work on desktop, monitor from laptop
+- Share agents between team members
+- Run heavy workloads on remote server, control from local machine
+- Multi-device development workflows
+
+## Quick Setup
+
+### Create a Relay Group
+
+On your first device:
+
+```bash
+hcom relay new
+```
+
+Output:
+
+```
+Relay group created!
+
+Token: relay_abc123def456_broker.emqx.io
+
+Run this on other devices:
+  hcom relay connect relay_abc123def456_broker.emqx.io
+```
+
+### Join from Other Devices
+
+On your second device:
+
+```bash
+hcom relay connect relay_abc123def456_broker.emqx.io
+```
+
+Output:
+
+```
+Relay configured!
+
+Connected to: broker.emqx.io
+Relay ID: abc123def456
+Device: LAPTOP (6 characters)
+```
+
+### Verify Connection
+
+```bash
+hcom relay
+```
+
+Output shows active status, broker, and connected devices:
+
+```
+Relay Status:
+  Enabled: true
+  Broker: broker.emqx.io
+  Relay ID: abc123def456
+  Device ID: LAPTOP
+
+Daemon: running (PID: 12345)
+```
+
+## How It Works
+
+### Architecture
+
+```
+Device A (DESKTOP)                 Device B (LAPTOP)
+    ↓                                     ↓
+hcom daemon ←─────── MQTT Broker ────→ hcom daemon
+    ↑                                     ↑
+  agents                                agents
+```
+
+1. Each device runs a **relay daemon** that connects to the MQTT broker
+2. When an event occurs (message, status change, agent lifecycle), the local daemon publishes to MQTT
+3. Remote daemons receive the event and insert it into their local database
+4. Agents on all devices see the same unified event stream
+
+### What Gets Synced
+
+**Synced:**
+- Messages (`hcom send`)
+- Agent status (active, listening, blocked, stopped)
+- Lifecycle events (created, started, stopped)
+- File edits
+- Command execution
+- Event subscriptions
+
+**Not synced:**
+- Transcripts (stored locally)
+- File contents (only edit notifications)
+- Agent processes (each device runs its own agents)
+
+## Public vs Private Brokers
+
+### Public Brokers (Default)
+
+hcom tries these public MQTT brokers in order:
+
+1. `broker.emqx.io:1883`
+2. `broker.hivemq.com:1883`
+3. `test.mosquitto.org:1883`
+
+The first working broker is used and pinned in your config.
+
+**Pros:**
+- No setup required
+- Free
+- No hosting needed
+
+**Cons:**
+- Messages are encrypted but pass through public infrastructure
+- Relies on third-party availability
+- Subject to broker rate limits
+
+### Private Broker (Recommended for Teams)
+
+Run your own MQTT broker for full control:
+
+```bash
+# Install mosquitto
+sudo apt install mosquitto mosquitto-clients
+
+# Start broker
+sudo systemctl start mosquitto
+```
+
+**Configure authentication** (`/etc/mosquitto/mosquitto.conf`):
+
+```conf
+listener 1883
+allow_anonymous false
+password_file /etc/mosquitto/passwd
+```
+
+Create user:
+
+```bash
+sudo mosquitto_passwd -c /etc/mosquitto/passwd hcom
+# Enter password when prompted
+
+sudo systemctl restart mosquitto
+```
+
+**Connect hcom to private broker:**
+
+```bash
+# On first device
+hcom relay new --broker mqtt://your-server.com:1883 --password <broker-password>
+
+# On other devices
+hcom relay connect <token> --password <broker-password>
+```
+
+### TLS/SSL (Secure)
+
+For production, use encrypted connection:
+
+```bash
+# Configure mosquitto for TLS
+listener 8883
+cafile /etc/mosquitto/ca_certificates/ca.crt
+certfile /etc/mosquitto/certs/server.crt
+keyfile /etc/mosquitto/certs/server.key
+
+# Connect with mqtts://
+hcom relay new --broker mqtts://your-server.com:8883 --password <password>
+```
+
+## Managing the Relay
+
+### Enable/Disable Sync
+
+```bash
+# Temporarily disable (keeps config)
+hcom relay off
+
+# Re-enable
+hcom relay on
+```
+
+### Daemon Control
+
+```bash
+# Check daemon status
+hcom relay daemon
+
+# Start daemon
+hcom relay daemon start
+
+# Stop daemon
+hcom relay daemon stop
+
+# Restart daemon
+hcom relay daemon restart
+```
+
+The daemon starts automatically when you run `hcom relay connect` or `hcom relay new`.
+
+### Remove Relay Configuration
+
+Edit `~/.hcom/config.toml` and remove the `[relay]` section:
+
+```toml
+[relay]
+url = ""        # Clear
+id = ""         # Clear
+token = ""      # Clear
+enabled = false
+```
+
+Or use config commands:
+
+```bash
+hcom config relay ""
+hcom config relay_id ""
+hcom config relay_token ""
+hcom config relay_enabled false
+```
+
+## Remote Agent Naming
+
+Agents on remote devices are namespaced by device:
+
+```
+Local:  luna, nova, kira
+Remote: luna:LAPTOP, nova:LAPTOP, kira:LAPTOP
+```
+
+### Addressing Remote Agents
+
+```bash
+# Send to local agent
+hcom send @luna -- "Hello"
+
+# Send to remote agent
+hcom send @luna:LAPTOP -- "Hello from desktop"
+
+# Broadcast to all devices
+hcom send -- "Hello everyone"
+```
+
+### List Remote Agents
+
+```bash
+hcom list
+```
+
+Output includes remote agents with device suffix:
+
+```
+Local Agents:
+  ▶ luna [CLAUDE] listening (0 unread)
+  ◉ nova [GEMINI] active (2 unread)
+
+Remote Agents (LAPTOP):
+  ▶ kira:LAPTOP [CODEX] listening (0 unread)
+  ◉ peso:LAPTOP [CLAUDE] active (1 unread)
+```
+
+## Troubleshooting
+
+### Daemon Won't Start
+
+**Check if already running:**
+
+```bash
+hcom relay daemon
+# Shows PID if running
+```
+
+**Check logs:**
+
+```bash
+hcom status --logs | grep relay
+```
+
+**Kill stale daemon:**
+
+```bash
+pkill -f 'hcom relay daemon'
+hcom relay daemon start
+```
+
+### Connection Failed
+
+**Test broker connectivity:**
+
+```bash
+# Install mosquitto clients
+sudo apt install mosquitto-clients
+
+# Test connection
+mosquitto_sub -h broker.emqx.io -p 1883 -t test
+# Press Ctrl+C after a few seconds
+# Should connect without errors
+```
+
+**Check firewall:**
+
+```bash
+# Ensure port 1883 (or 8883 for TLS) is not blocked
+sudo ufw allow 1883/tcp
+```
+
+### Messages Not Syncing
+
+**Verify relay is enabled:**
+
+```bash
+hcom relay
+# Should show: Enabled: true
+```
+
+**Check daemon on both devices:**
+
+```bash
+hcom relay daemon
+# Should show: running (PID: XXXXX)
+```
+
+**Restart daemon:**
+
+```bash
+hcom relay daemon restart
+```
+
+**Check device IDs match the relay group:**
+
+```bash
+hcom config relay_id
+# Should be the same on all devices
+```
+
+### High Latency
+
+**Use a private broker** closer to your devices:
+
+```bash
+hcom relay new --broker mqtt://local-server:1883
+```
+
+**Check broker load:**
+
+Public brokers may be slow during high usage. Switch brokers:
+
+```bash
+hcom relay new --broker mqtt://broker.hivemq.com:1883
+```
+
+## Security Considerations
+
+### Token Security
+
+The relay token contains:
+- Relay group ID (UUID)
+- Broker URL
+
+Anyone with the token can join your relay group.
+
+**Best practices:**
+- Don't share tokens publicly
+- Rotate tokens by creating a new relay group
+- Use a private broker for sensitive work
+
+### Message Encryption
+
+hcom does **not** encrypt message content. MQTT transmits messages as plaintext unless you use:
+
+- **TLS/SSL** (`mqtts://`) for transport encryption
+- **Private broker** on your own network
+
+For sensitive data:
+1. Use a private broker with TLS
+2. Or use a VPN/SSH tunnel to the broker
+3. Or implement application-level encryption (future feature)
+
+## Advanced Configuration
+
+### Custom Device ID
+
+Device IDs are auto-generated (6 characters, e.g., `LAPTOP`). To customize:
+
+Edit `~/.hcom/relay.device` (create if missing):
+
+```
+MY-DESKTOP
+```
+
+Restart daemon:
+
+```bash
+hcom relay daemon restart
+```
+
+### Relay with HCOM_DIR (Sandbox Mode)
+
+Each HCOM_DIR can have its own relay configuration:
+
+```bash
+# Project A
+export HCOM_DIR="$HOME/project-a/.hcom"
+hcom relay new
+
+# Project B (different relay group)
+export HCOM_DIR="$HOME/project-b/.hcom"
+hcom relay new
+```
+
+Agents in different HCOM_DIRs don't see each other, even on the same device.
+
+## Performance
+
+### Bandwidth Usage
+
+Typical message sizes:
+- Text message: ~500 bytes
+- Status update: ~200 bytes
+- File edit event: ~300 bytes
+
+**Estimate:**
+- 100 messages/day ≈ 50 KB/day
+- 1000 messages/day ≈ 500 KB/day
+
+Negligible for most use cases.
+
+### Scaling
+
+Public brokers rate-limit connections. For large teams:
+
+1. Run a **private broker** (Mosquitto, EMQX, HiveMQ)
+2. Use **dedicated relay group per team** (separate tokens)
+3. Monitor broker metrics (connections, message rate)
+
+## FAQ
+
+**Q: Can I use multiple relay groups?**
+
+No, each hcom instance connects to one relay group at a time. Use separate HCOM_DIRs for multiple groups.
+
+**Q: What happens if I go offline?**
+
+Messages are queued locally. When you reconnect, the daemon syncs missed events.
+
+**Q: Can I relay between different platforms (Linux/Mac/Windows)?**
+
+Yes, relay works cross-platform.
+
+**Q: Does relay work with all AI tools?**
+
+Yes, relay is tool-agnostic. Any hcom-tracked agent syncs.
+
+**Q: Can I bridge two relay groups?**
+
+Not currently supported. Each group is isolated.

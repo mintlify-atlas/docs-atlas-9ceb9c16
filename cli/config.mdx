@@ -1,0 +1,466 @@
+---
+title: 'hcom config'
+description: 'View and edit configuration settings'
+---
+
+## Overview
+
+The `hcom config` command manages global and per-agent settings stored in `~/.hcom/config.toml` and environment variables.
+
+## Basic Usage
+
+```bash
+# Show all config
+hcom config
+
+# JSON output
+hcom config --json
+
+# Edit in $EDITOR
+hcom config --edit
+
+# Reset to defaults
+hcom config --reset
+```
+
+## Get and Set Keys
+
+```bash
+# Get value
+hcom config tag
+hcom config HCOM_TAG           # Prefix optional
+
+# Set value
+hcom config tag myteam
+hcom config HCOM_TIMEOUT 3600
+
+# Clear value
+hcom config tag ""
+
+# Get detailed help
+hcom config tag --info
+hcom config tag info            # Alternative
+hcom config tag ?               # Alternative
+```
+
+## Configuration Keys
+
+### HCOM_TAG
+
+Group tag for launched instances.
+
+```bash
+# Set tag
+hcom config tag dev
+
+# Effect: instances named dev-luna, dev-nova, etc.
+# Addressing: @dev sends to all with tag 'dev'
+
+# Clear tag
+hcom config tag ""
+```
+
+**Allowed characters:** letters, numbers, hyphens (a-z, A-Z, 0-9, -)
+
+### HCOM_HINTS
+
+Text appended to every message received by agents.
+
+```bash
+# Set hints
+hcom config hints "Always respond in JSON format"
+
+# Clear hints
+hcom config hints ""
+```
+
+**Use cases:**
+- Persistent instructions
+- Team coordination guidelines
+- Output format requirements
+
+### HCOM_NOTES
+
+One-time text added to agent bootstrap (not repeated per-message).
+
+```bash
+# Set bootstrap notes
+hcom config notes "Check hcom list before spawning"
+
+# Clear notes
+hcom config notes ""
+```
+
+**Note:** Changing after launch has no effect (bootstrap already delivered).
+
+### HCOM_TIMEOUT
+
+Idle timeout for headless/vanilla Claude (seconds). Default: 86400 (24 hours).
+
+```bash
+# Set timeout
+hcom config HCOM_TIMEOUT 3600   # 1 hour
+```
+
+**Applies to:**
+- Headless Claude: `hcom N claude -p`
+- Vanilla Claude: `claude` + `hcom start`
+
+**Does NOT apply to:**
+- Interactive PTY: `hcom N claude`
+- Gemini or Codex
+
+### HCOM_SUBAGENT_TIMEOUT
+
+Timeout for Claude subagents (Task tool). Default: 30 seconds.
+
+```bash
+# Increase for complex tasks
+hcom config subagent_timeout 60
+```
+
+### Tool Args
+
+Default arguments passed to tools on launch.
+
+```bash
+# Claude
+hcom config claude_args "--model opus"
+
+# Gemini
+hcom config gemini_args "--model gemini-2.5-flash"
+
+# Codex
+hcom config codex_args "--search"
+
+# OpenCode
+hcom config opencode_args "--model o3"
+
+# Clear
+hcom config claude_args ""
+```
+
+**Note:** Launch-time args override config args.
+
+### System Prompts
+
+```bash
+# Gemini system prompt
+hcom config HCOM_GEMINI_SYSTEM_PROMPT "You are a testing specialist"
+
+# Codex system prompt
+hcom config HCOM_CODEX_SYSTEM_PROMPT "Focus on security"
+```
+
+### HCOM_TERMINAL
+
+Terminal preset for spawning agent windows.
+
+```bash
+# Set preset
+hcom config terminal kitty
+hcom config terminal wezterm-split
+hcom config terminal tmux
+
+# Reset to auto-detect
+hcom config terminal default
+
+# View available presets
+hcom config terminal --info
+
+# Kitty remote control setup
+hcom config terminal kitty --setup
+```
+
+**Managed presets (open + close on kill):**
+- `kitty`, `kitty-window`, `kitty-tab`, `kitty-split`
+- `wezterm`, `wezterm-window`, `wezterm-tab`, `wezterm-split`
+- `tmux`, `tmux-split`
+
+**Other presets (open only):**
+- `Terminal.app`, `iTerm`, `Ghostty`, `alacritty`, `ttab`
+
+**Custom command:**
+```bash
+hcom config terminal "my-terminal -e bash {script}"
+```
+
+**Custom preset in config.toml:**
+```toml
+[terminal.presets.myterm]
+open = "myterm spawn -- bash {script}"
+close = "myterm kill --id {id}"
+binary = "myterm"
+```
+
+### HCOM_AUTO_APPROVE
+
+Auto-approve safe hcom commands (true/false). Default: false.
+
+```bash
+# Enable
+hcom config auto_approve 1
+hcom config auto_approve true
+
+# Disable
+hcom config auto_approve 0
+hcom config auto_approve false
+```
+
+**Safe commands (auto-approved):**
+- send, start, list, events, listen, relay, config, transcript, archive, status, help, --help, --version
+
+**Always require approval:**
+- reset, stop, launches
+
+### HCOM_AUTO_SUBSCRIBE
+
+Auto-subscribe event presets for new instances. Default: collision
+
+```bash
+# Set presets (comma-separated)
+hcom config auto_subscribe "collision,created,stopped"
+
+# Disable
+hcom config auto_subscribe ""
+```
+
+**Available presets:**
+- `collision` - File edit conflicts
+- `created` - New instances join
+- `stopped` - Instances leave
+- `blocked` - Approval needed
+
+### HCOM_NAME_EXPORT
+
+Export instance name to custom env var.
+
+```bash
+# Set export variable
+hcom config name_export "HCOM_NAME"
+
+# Launched instances now have:
+# HCOM_NAME=luna (or generated name)
+
+# Disable
+hcom config name_export ""
+```
+
+**Use in scripts:**
+```bash
+hcom send "@$HCOM_NAME completed task"
+```
+
+### Relay Settings
+
+```bash
+# MQTT broker URL
+hcom config relay "mqtts://broker.emqx.io:8883"
+
+# Relay group ID
+hcom config relay_id "550e8400-e29b-41d4-a716-446655440000"
+
+# Auth token
+hcom config relay_token "secret123"
+
+# Enable/disable
+hcom config relay_enabled true
+hcom config relay_enabled false
+```
+
+**Note:** Prefer `hcom relay` commands over direct config editing.
+
+## Per-Instance Config
+
+Override settings for specific agents.
+
+```bash
+# Show instance config
+hcom config -i luna
+hcom config -i self          # Current agent
+
+# Get instance key
+hcom config -i luna tag
+
+# Set instance key
+hcom config -i luna tag api
+hcom config -i luna timeout 7200
+hcom config -i luna hints "You handle API tasks"
+hcom config -i luna subagent_timeout 60
+
+# Clear instance key
+hcom config -i luna tag ""
+hcom config -i luna timeout default
+```
+
+**Instance keys:**
+- `tag` - Changes display name (luna → api-luna)
+- `timeout` - Instance-specific idle timeout
+- `hints` - Instance-specific message hints
+- `subagent_timeout` - Instance-specific subagent timeout
+
+## Precedence
+
+Settings are resolved in order:
+
+1. **Runtime** - Per-instance DB values
+2. **Environment** - `HCOM_*` variables
+3. **TOML** - `~/.hcom/config.toml`
+4. **Default** - Built-in defaults
+
+```bash
+# Show all with sources
+hcom config
+
+# Example output:
+HCOM_TAG                     dev                            [toml]
+HCOM_TIMEOUT                 7200                           [runtime]
+HCOM_HINTS                   "Check status first"           [env]
+```
+
+**Source indicators:**
+- `[runtime]` - Per-instance override
+- `[env]` - Environment variable
+- `[toml]` - Config file
+- `[default]` - Built-in default
+
+## Configuration Files
+
+**Location:** `~/.hcom/config.toml`
+
+**Override:** `HCOM_DIR=/path/.hcom` changes location to `/path/.hcom/config.toml`
+
+**Format:** TOML with nested sections
+
+```toml
+[launch]
+tag = "dev"
+hints = "Coordinate with team"
+notes = "Check before spawning"
+subagent_timeout = 60
+auto_subscribe = "collision,created"
+
+[launch.claude]
+args = "--model opus"
+
+[launch.gemini]
+args = "--model gemini-2.5-flash"
+system_prompt = "You are a testing specialist"
+
+[launch.codex]
+args = "--search"
+sandbox_mode = "off"
+system_prompt = "Focus on security"
+
+[launch.opencode]
+args = "--model o3"
+
+[terminal]
+active = "kitty"
+
+[preferences]
+timeout = 86400
+auto_approve = false
+name_export = "HCOM_NAME"
+
+[relay]
+url = "mqtts://broker.emqx.io:8883"
+id = "550e8400-e29b-41d4-a716-446655440000"
+token = "secret123"
+enabled = true
+```
+
+## JSON Output
+
+```bash
+hcom config --json
+```
+
+```json
+{
+  "HCOM_TAG": "dev",
+  "HCOM_HINTS": "Coordinate with team",
+  "HCOM_NOTES": "",
+  "HCOM_TIMEOUT": "86400",
+  "HCOM_SUBAGENT_TIMEOUT": "30",
+  "HCOM_CLAUDE_ARGS": "--model opus",
+  "HCOM_GEMINI_ARGS": "",
+  "HCOM_CODEX_ARGS": "",
+  "HCOM_OPENCODE_ARGS": "",
+  "HCOM_TERMINAL": "kitty",
+  "HCOM_AUTO_APPROVE": "false",
+  "HCOM_AUTO_SUBSCRIBE": "collision,created",
+  "HCOM_NAME_EXPORT": "HCOM_NAME",
+  "HCOM_RELAY": "mqtts://broker.emqx.io:8883",
+  "HCOM_RELAY_ID": "550e***",
+  "HCOM_RELAY_TOKEN": "sec***",
+  "HCOM_RELAY_ENABLED": "true"
+}
+```
+
+## Examples
+
+### Team Setup
+
+```bash
+# Tag all agents
+hcom config tag team-alpha
+
+# Shared hints
+hcom config hints "Coordinate with @team-alpha members"
+
+# Auto-subscribe to team events
+hcom config auto_subscribe "created,stopped,collision"
+```
+
+### Development Workflow
+
+```bash
+# Terminal preference
+hcom config terminal kitty-split
+
+# Auto-approve for speed
+hcom config auto_approve 1
+
+# Export name for scripts
+hcom config name_export "AGENT_NAME"
+```
+
+### Role Specialization
+
+```bash
+# API handler
+hcom config -i api-agent tag api
+hcom config -i api-agent hints "Handle API requests only"
+
+# Tester
+hcom config -i tester tag test
+hcom config -i tester hints "Run tests and report results"
+```
+
+### Sandbox Mode
+
+```bash
+# Project-local hcom
+export HCOM_DIR="$PWD/.hcom"
+
+# Configure
+hcom config tag sandbox
+hcom config terminal print  # No window spawning
+```
+
+## Tips
+
+- Use `--info` to see detailed help for any key
+- Quote multi-word values: `hcom config hints "check status"`
+- Use instance config for role specialization
+- Terminal presets marked `✓` are available on your system
+- Relay settings managed via `hcom relay` commands
+- Config changes apply to new launches (not existing agents)
+- Use `--edit` for bulk changes
+
+## See Also
+
+- [hcom relay](/cli/relay) - Cross-device sync
+- [hcom hooks](/cli/hooks) - Tool integration
+- [hcom status](/cli/status) - View effective config

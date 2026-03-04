@@ -1,0 +1,446 @@
+---
+title: Codex Integration
+description: Integrate Codex with hcom for automatic message delivery and agent coordination
+---
+
+# Codex Integration
+
+Codex integration uses a notify hook for turn completion and PTY mode for message delivery.
+
+## Message Delivery
+
+**Automatic (PTY mode only):** Messages are delivered via PTY injection when agent goes idle.
+
+**Manual (vanilla mode):** Agent must poll for messages using `hcom listen`.
+
+**Why PTY only?**
+- Codex has only one hook: `codex-notify` (turn completion)
+- No hook fires when agent goes idle (unlike Claude/Gemini)
+- PTY wrapper detects idle and injects messages
+
+## Hook Installation
+
+Hooks are installed to `~/.codex/config.toml` and policies to `~/.codex/rules/hcom.rules`.
+
+### Automatic Install
+
+Run Codex via hcom launcher:
+
+```bash
+hcom codex
+```
+
+Hooks are installed automatically on first launch.
+
+### Manual Install
+
+If you prefer to run Codex directly:
+
+```bash
+hcom hooks add codex
+```
+
+Then restart Codex for hooks to activate.
+
+### Verify Installation
+
+```bash
+hcom status
+# Look for: [✓] codex
+
+hcom hooks status
+# Shows hook configuration details
+```
+
+## Launch Modes
+
+### PTY Mode (Required for Automatic Messages)
+
+Launch with hcom for automatic message delivery:
+
+```bash
+# Single instance in current terminal
+hcom codex
+
+# Multiple instances in new windows
+hcom 3 codex
+
+# With initial prompt
+hcom codex --hcom-prompt "Start by checking hcom list"
+
+# With tag for grouping
+hcom codex --tag backend
+```
+
+**PTY mode features:**
+- Automatic message delivery via terminal injection
+- Terminal screen capture (`hcom term`)
+- Automatic cleanup on kill (`hcom kill`)
+- Fork and resume support
+
+### Vanilla Mode (Manual Polling)
+
+Run Codex directly after installing hooks:
+
+```bash
+codex
+```
+
+Inside the session, connect to hcom:
+
+```bash
+hcom start
+```
+
+**Vanilla mode behavior:**
+- Hook tracks turn completion only
+- No automatic message delivery
+- Agent must poll: `hcom listen` or `hcom events`
+- Binding happens at notify hook via transcript marker
+
+**Example workflow:**
+
+In vanilla Codex:
+
+```bash
+# Connect to hcom
+hcom start
+
+# Poll for messages
+hcom listen 10
+
+# Or use events
+hcom events --agent self --type message
+```
+
+## Hook Types
+
+Codex has 1 hook type:
+
+| Hook | When | Purpose |
+|------|------|--------|
+| codex-notify | Agent turn completes | Update status to listening, trigger PTY delivery |
+
+**Payload format:**
+
+```json
+{
+  "type": "agent-turn-complete",
+  "thread-id": "uuid",
+  "turn-id": "12345",
+  "cwd": "/path/to/project",
+  "input-messages": ["user prompt"],
+  "last-assistant-message": "response text",
+  "transcript_path": "/path/to/transcript.jsonl"
+}
+```
+
+**Hook behavior:**
+
+1. Parse JSON from argv[2]
+2. Resolve instance via thread-id or process binding
+3. Update status to `listening`
+4. Set `idle_since` timestamp
+5. Notify PTY wrapper via TCP wake
+
+## Configuration
+
+### Default Arguments
+
+```bash
+hcom config codex_args "--search"
+```
+
+Merged with launch-time args (launch args win on conflict).
+
+### System Prompt
+
+```bash
+hcom config codex_system_prompt "You are a backend engineer."
+```
+
+Or via environment:
+```bash
+export HCOM_CODEX_SYSTEM_PROMPT="Your role..."
+```
+
+### Sandbox Mode
+
+```bash
+hcom config codex_sandbox_mode off
+```
+
+### Auto-Approval (Execpolicy)
+
+Codex uses execpolicy rules for auto-approval.
+
+**Enable auto-approval:**
+```bash
+hcom config auto_approve 1
+```
+
+This creates `~/.codex/rules/hcom.rules`:
+
+```python
+# hcom integration - auto-approve safe commands
+prefix_rule(pattern=["hcom", "send"], decision="allow")
+prefix_rule(pattern=["hcom", "list"], decision="allow")
+prefix_rule(pattern=["hcom", "events"], decision="allow")
+prefix_rule(pattern=["hcom", "listen"], decision="allow")
+prefix_rule(pattern=["hcom", "transcript"], decision="allow")
+prefix_rule(pattern=["hcom", "status"], decision="allow")
+prefix_rule(pattern=["hcom", "config"], decision="allow")
+prefix_rule(pattern=["hcom", "relay"], decision="allow")
+prefix_rule(pattern=["hcom", "archive"], decision="allow")
+prefix_rule(pattern=["hcom", "claude", "--help"], decision="allow")
+prefix_rule(pattern=["hcom", "gemini", "-h"], decision="allow")
+# ... more rules
+```
+
+**Rule format:**
+- `prefix_rule()` matches command prefix
+- `decision="allow"` auto-approves
+- Priority handled by Codex
+
+## Transcript Path Derivation
+
+Codex transcript path is derived from thread-id:
+
+**Path pattern:** `$CODEX_HOME/sessions/**/rollout-*-{thread_id}.jsonl`
+
+**Search logic:**
+1. Use `CODEX_HOME` env var or `~/.codex` default
+2. Glob search for `rollout-*-{thread_id}.jsonl`
+3. Return most recently modified match
+
+**Why this matters:**
+- Transcript path not always in notify payload
+- Needed for vanilla binding
+- Auto-derived when missing
+
+## Session Binding
+
+### PTY Mode
+
+Binding happens at notify hook:
+
+1. `HCOM_PROCESS_ID` env var present
+2. Bind thread-id to process
+3. Update directory, session_id, transcript_path
+4. Set listening status
+5. Notify PTY wrapper
+
+### Vanilla Mode
+
+Binding happens via transcript marker search:
+
+1. Run `hcom start` inside Codex
+2. Output contains `[hcom:instance-name]` marker
+3. Notify hook searches transcript for marker
+4. Binds thread-id to instance automatically
+
+**Transcript search:**
+```rust
+fn find_last_bind_marker(transcript_path: &str) -> Option<String>
+```
+
+- Reads last 50KB of transcript
+- Searches for `[hcom:name]` pattern
+- Returns instance name if found
+
+## Launch Examples
+
+### Single Agent
+
+```bash
+# Current terminal
+hcom codex
+
+# New window
+hcom 1 codex
+
+# With initial prompt
+hcom codex --hcom-prompt "Check hcom list"
+```
+
+### Multiple Agents
+
+```bash
+# 3 agents in new windows
+hcom 3 codex
+
+# Tagged group
+hcom 3 codex --tag api
+
+# With sandbox mode
+hcom codex --sandbox danger-full-access
+```
+
+### Fork and Resume
+
+```bash
+# Fork active or stopped agent
+hcom f luna
+
+# Resume stopped agent
+hcom r luna
+```
+
+## PTY Injection
+
+Codex message delivery works differently than Claude/Gemini:
+
+**Why no hook-based delivery?**
+- Codex only has turn-complete hook
+- No hook fires when agent is idle
+- Can't inject messages via hook output
+
+**How PTY delivery works:**
+
+1. Notify hook sets status to `listening`
+2. Notify hook writes `idle_since` timestamp
+3. Notify hook sends TCP wake to PTY wrapper
+4. PTY wrapper detects idle state
+5. PTY wrapper injects messages via terminal
+6. Codex sees injected text at next prompt
+
+**TranscriptWatcher:**
+- Monitors transcript file for changes
+- Detects idle by lack of activity
+- Alternative to hook-based detection
+
+## Manual Polling (Vanilla Mode)
+
+Since vanilla mode has no automatic delivery, agents must poll:
+
+### Using listen
+
+```bash
+# Block until message arrives (60s default)
+hcom listen
+
+# With timeout
+hcom listen 10
+
+# With filters
+hcom listen --from nova
+```
+
+### Using events
+
+```bash
+# Check for messages
+hcom events --type message --agent self --last 5
+
+# Wait for specific event
+hcom events --wait --from nova
+```
+
+### Loop polling
+
+```bash
+while true; do
+  hcom listen 60 && break
+  echo "No messages, waiting..."
+  sleep 5
+done
+```
+
+## Advanced
+
+### Hook Command Format
+
+**config.toml:**
+```toml
+notify = ["hcom", "codex-notify"]
+```
+
+Codex spawns: `hcom codex-notify '{json_payload}'`
+
+Payload passed as argv[2].
+
+### Stale Command Detection
+
+hcom detects stale hook commands (e.g., `/old/path/hcom`) and auto-updates:
+
+1. `setup_codex_hooks()` checks existing notify line
+2. If contains `codex-notify` but path differs
+3. Removes old line and re-adds with current path
+4. Preserves other config settings
+
+### Orphaned Process Recovery
+
+If Codex process is orphaned (no session binding):
+
+```bash
+hcom start --orphan <name-or-pid>
+```
+
+Recreates identity from pidtrack.
+
+## Troubleshooting
+
+### Messages not arriving (PTY mode)
+
+1. Check Codex is idle: `hcom list` shows `listening` status
+2. Verify PTY wrapper running: `ps aux | grep hcom | grep pty`
+3. Check idle_since timestamp: `hcom list <name> idle_since`
+4. Try manual wake: `hcom send @codex-instance -- test`
+
+### Messages not arriving (vanilla mode)
+
+Expected behavior. Vanilla Codex must poll manually:
+
+```bash
+hcom listen 10
+```
+
+### Hooks not working
+
+```bash
+# Re-install hooks
+hcom hooks remove codex
+hcom hooks add codex
+
+# Restart Codex
+```
+
+### Transcript path not found
+
+1. Check `CODEX_HOME` env var
+2. Verify transcript exists: `ls ~/.codex/sessions/*/rollout-*.jsonl`
+3. Check thread-id in hook payload
+
+### Config.toml has existing notify
+
+hcom refuses to overwrite non-hcom notify hooks:
+
+```toml
+notify = ["other-tool", "other-hook"]
+```
+
+Error: "config.toml already has a notify hook configured"
+
+**Solution:** Remove other notify hook or use separate Codex install.
+
+## Reference
+
+**Hook configuration:** `~/.codex/config.toml`
+
+**Policy configuration:** `~/.codex/rules/hcom.rules`
+
+**Config path function:**
+```rust
+pub fn get_codex_config_path() -> PathBuf
+pub fn get_codex_rules_path() -> PathBuf
+```
+
+**Transcript derivation:**
+```rust
+pub fn derive_codex_transcript_path(thread_id: &str) -> Option<String>
+```
+
+**Notify handler:**
+```rust
+pub fn handle_codex_notify(args: &[String]) -> i32
+```

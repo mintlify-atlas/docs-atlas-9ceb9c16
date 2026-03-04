@@ -1,0 +1,484 @@
+---
+title: 'Creating Context Bundles'
+description: 'Package transcript, events, and files for structured agent handoffs'
+---
+
+Context bundles package transcript excerpts, event references, and file paths into a structured, reusable unit. Use bundles to hand off work between agents with full context preservation.
+
+## What is a Bundle?
+
+A bundle is a structured context package containing:
+
+- **Transcript ranges** - Specific conversation exchanges
+- **Event references** - Relevant events (messages, file edits, commands)
+- **File paths** - Files involved in the work
+- **Metadata** - Title, description, author, timestamp
+
+## Quick Bundle Creation
+
+Create and send a bundle inline:
+
+```bash
+hcom send @reviewer \
+  --title "Auth Bug Fix" \
+  --description "Fixed authentication flow, updated tests" \
+  --transcript "10-15:normal" \
+  --events "100-105" \
+  --files "src/auth.py,tests/test_auth.py" \
+  -- Please review this fix
+```
+
+The bundle is automatically created and attached to the message.
+
+## Bundle Preparation
+
+Get context suggestions for creating a bundle:
+
+```bash
+hcom bundle prepare
+```
+
+Output:
+```
+[Bundle Context: luna]
+
+─────────────────────────────────────────
+TRANSCRIPT
+
+#10: Fix authentication bug
+#11: Run tests
+#12: Update documentation
+
+--- Messages to (5 events) ---
+  #100 | nova @ 10:30:45 | "Can you help with auth?"
+  #101 | kira @ 10:32:12 | "Review complete"
+
+--- File operations (3 events) ---
+  #102 | luna @ 10:33:00 | tool:Edit src/auth.py
+  #103 | luna @ 10:33:45 | tool:Write tests/test_auth.py
+
+─────────────────────────────────────────
+FILES (3)
+  src/auth.py
+  src/middleware.py
+  tests/test_auth.py
+
+─────────────────────────────────────────
+CREATE:
+hcom bundle create "Bundle Title Here" --name luna \
+  --description "detailed description text here" \
+  --transcript "10-12:normal" \
+  --events "100,101,102,103" \
+  --files "src/auth.py,tests/test_auth.py"
+```
+
+<Note>
+Bundle prepare scans recent transcript and events to suggest what to include. Use it as a template for your bundle.
+</Note>
+
+## Transcript Detail Levels
+
+Choose detail level for each transcript range:
+
+### Normal (Truncated)
+
+Summary view:
+
+```bash
+--transcript "10-15:normal"
+```
+
+Use for:
+- Context awareness
+- Task overviews
+- Large ranges
+
+### Full (Complete Text)
+
+Entire conversation:
+
+```bash
+--transcript "10-15:full"
+```
+
+Use for:
+- Detailed review
+- Complete reasoning
+- Smaller ranges
+
+### Detailed (With Tool I/O)
+
+Complete text + tool details:
+
+```bash
+--transcript "10-15:detailed"
+```
+
+Use for:
+- Debugging
+- Technical analysis
+- Tool-heavy work
+
+### Mix Detail Levels
+
+```bash
+--transcript "3-14:normal,6:full,22-30:detailed"
+```
+
+Provide different detail for different sections.
+
+## Manual Bundle Creation
+
+Create a standalone bundle:
+
+```bash
+hcom bundle create "Auth Bug Fix" \
+  --description "Fixed authentication flow with improved error handling" \
+  --transcript "10-15:full" \
+  --events "100-105" \
+  --files "src/auth.py,tests/test_auth.py"
+```
+
+Output:
+```
+bundle:a1b2c3d4
+```
+
+<Steps>
+
+### Prepare your context
+
+```bash
+hcom bundle prepare
+```
+
+### Create the bundle
+
+```bash
+hcom bundle create "Task Complete" \
+  --description "Auth fix with tests" \
+  --transcript "10-15:full" \
+  --events "100-105" \
+  --files "src/auth.py"
+```
+
+### Share it
+
+```bash
+hcom send @lead -- Task complete. See bundle:a1b2c3d4 for details
+```
+
+</Steps>
+
+## Bundle Operations
+
+### List Bundles
+
+```bash
+hcom bundle list
+```
+
+Output:
+```
+BUNDLE_ID     TITLE                          BY           AGE
+bundle:a1b2   Auth Bug Fix                   luna         2h
+bundle:c3d4   Database Migration             nova         1d
+```
+
+With JSON:
+```bash
+hcom bundle list --json --last 10
+```
+
+### Show Bundle Metadata
+
+```bash
+hcom bundle show bundle:a1b2c3d4
+```
+
+Output:
+```
+Bundle: bundle:a1b2c3d4
+Title: Auth Bug Fix
+By: luna
+Description: Fixed authentication flow with improved error handling
+
+Events: 6 referenced
+Files: 2 referenced
+Transcript: 2 ranges
+```
+
+### Expand Full Bundle
+
+```bash
+hcom bundle cat bundle:a1b2c3d4
+```
+
+Shows:
+- Complete metadata
+- Full file list with sizes
+- All referenced events (full JSON)
+- Transcript content (respects detail level)
+
+### Bundle Chains
+
+Bundles can extend previous bundles:
+
+```bash
+hcom bundle create "Phase 2" \
+  --description "Built on phase 1 work" \
+  --extends bundle:a1b2c3d4 \
+  --transcript "20-25:full" \
+  --events "110-115"
+```
+
+View the chain:
+```bash
+hcom bundle chain bundle:e5f6g7h8
+```
+
+Output:
+```
+Bundle chain (3 levels):
+→ bundle:e5f6g7h8: Phase 2
+  ↳ bundle:a1b2c3d4: Auth Bug Fix
+    ↳ bundle:1234abcd: Initial Setup
+```
+
+## Bundle Formats
+
+### Event References
+
+Comma-separated IDs or ranges:
+
+```bash
+--events "1,2,5-10,15"
+# Includes: 1, 2, 5, 6, 7, 8, 9, 10, 15
+```
+
+### File Paths
+
+Comma-separated paths (relative or absolute):
+
+```bash
+--files "src/auth.py,tests/test_auth.py,README.md"
+```
+
+### Transcript Ranges
+
+Comma-separated with detail levels:
+
+```bash
+--transcript "3-14:normal,6:full,22-30:detailed"
+```
+
+Format: `START-END:DETAIL` or `POSITION:DETAIL`
+
+## JSON Bundle Creation
+
+Create from JSON:
+
+```bash
+hcom bundle create --bundle '{
+  "title": "Auth Fix",
+  "description": "Complete auth flow rewrite",
+  "refs": {
+    "events": ["100-105"],
+    "files": ["src/auth.py"],
+    "transcript": ["10-15:full"]
+  },
+  "extends": "bundle:1234abcd"
+}'
+```
+
+From file:
+```bash
+hcom bundle create --bundle-file context.json
+```
+
+## Practical Examples
+
+### Task Handoff
+
+```bash
+hcom send @nova \
+  --title "Database Migration" \
+  --description "Completed schema changes, tests passing" \
+  --transcript "30-45:full" \
+  --events "200-220" \
+  --files "migrations/001.sql,tests/test_migration.py" \
+  -- Ready for your review
+```
+
+### Bug Report
+
+```bash
+hcom send @debugger \
+  --title "Auth Bug Investigation" \
+  --description "Error occurs during password reset flow" \
+  --transcript "50-55:detailed" \
+  --events "500-510" \
+  --files "src/auth.py,logs/error.log" \
+  -- Can you take a look?
+```
+
+### Code Review
+
+```bash
+hcom send @reviewer \
+  --title "API Refactor" \
+  --description "Refactored REST endpoints, added validation" \
+  --transcript "100-120:normal,115:full" \
+  --events "1000-1050" \
+  --files "src/api/*.py,tests/test_api.py" \
+  -- Please review before merge
+```
+
+### Multi-Phase Work
+
+Phase 1:
+```bash
+hcom bundle create "Phase 1: Setup" \
+  --description "Database schema and initial models" \
+  --transcript "10-20:full" \
+  --events "100-120" \
+  --files "models/*.py"
+```
+
+Phase 2:
+```bash
+hcom bundle create "Phase 2: API" \
+  --description "REST endpoints using phase 1 models" \
+  --extends bundle:phase1 \
+  --transcript "30-40:full" \
+  --events "200-220" \
+  --files "api/*.py"
+```
+
+## Bundle Best Practices
+
+### Writing Descriptions
+
+<Tip>
+**Good description:**
+"Implemented JWT-based authentication. Updated login endpoint to generate tokens, added middleware for token validation. All tests passing. Known issue: refresh token rotation needs review."
+
+**Bad description:**
+"Fixed auth"
+</Tip>
+
+Include:
+- What was done
+- Key decisions made
+- Current state
+- Issues or concerns
+- Next steps
+
+### Choosing What to Include
+
+**Include:**
+- Relevant transcript ranges (not entire history)
+- Key events (messages, file edits, commands)
+- Modified files (not all project files)
+
+**Exclude:**
+- Unrelated experiments
+- False starts
+- Unrelated file changes
+- Debug/test runs that didn't matter
+
+### Detail Level Guidelines
+
+- Use **normal** for context awareness ("what was I thinking?")
+- Use **full** for decision review ("why did I do that?")
+- Use **detailed** for technical debugging ("what tool calls happened?")
+
+## Troubleshooting
+
+### Bundle Not Found
+
+Search by prefix:
+
+```bash
+hcom bundle list | grep auth
+hcom bundle show a1b2  # Prefix match
+```
+
+### Missing Transcript Content
+
+Check if transcript file exists:
+
+```bash
+hcom list luna --json | jq .transcript_path
+```
+
+Verify exchange range:
+```bash
+hcom transcript @luna
+# Check available exchange numbers
+```
+
+### Events Don't Match
+
+Verify event IDs exist:
+
+```bash
+hcom events --last 50 | jq .id
+```
+
+### File Paths Invalid
+
+Use relative paths from project root:
+
+```bash
+# Good:
+--files "src/auth.py"
+
+# Bad:
+--files "/Users/me/project/src/auth.py"
+```
+
+## Advanced Usage
+
+### Prepare for Specific Agent
+
+```bash
+hcom bundle prepare --for nova
+# Shows context from nova's perspective
+```
+
+### Compact Preparation
+
+Skip how-to guidance:
+
+```bash
+hcom bundle prepare --compact
+```
+
+### Custom Context Window
+
+```bash
+hcom bundle prepare \
+  --last-transcript 50 \
+  --last-events 20
+```
+
+## Best Practices
+
+<Tip>
+- **Always write detailed descriptions** - Future you will thank you
+- **Use transcript ranges** - Don't include irrelevant exchanges
+- **Reference bundles in messages** - "See bundle:abc123" is better than copy-paste
+- **Chain bundles for phases** - Build on previous work
+- **Mix detail levels** - Full for key decisions, normal for context
+</Tip>
+
+<Warning>
+Bundles reference transcript and events. If you `hcom reset` (archives session), bundle references become invalid. Export important bundles before reset.
+</Warning>
+
+## Next Steps
+
+- [Workflow automation](/guides/workflows)
+- [Cross-device relay](/guides/cross-device)
+- [Send messages with bundles](/guides/sending-messages)

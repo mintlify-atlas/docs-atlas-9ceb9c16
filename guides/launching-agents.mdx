@@ -1,0 +1,251 @@
+---
+title: 'Launching Agents'
+description: 'Learn how to launch and manage AI agents with hcom'
+---
+
+Launch AI agents (Claude Code, Gemini CLI, Codex, OpenCode) with built-in communication capabilities. When launched with `hcom`, agents automatically get hooks for instant message delivery and event tracking.
+
+## Basic Launch
+
+Launch a single agent in the current terminal:
+
+```bash
+hcom claude
+hcom gemini
+hcom codex
+hcom opencode
+```
+
+## Launch Multiple Agents
+
+Launch multiple agents at once by prefixing with a count:
+
+```bash
+hcom 3 claude      # Opens 3 new terminal windows
+hcom 2 gemini      # Opens 2 Gemini instances
+```
+
+<Note>
+All launched agents can communicate with each other via hcom messages and see each other's activity through events.
+</Note>
+
+## Launch Modes
+
+### Interactive Mode (Default)
+
+Opens agents in new terminal windows:
+
+```bash
+hcom 3 claude --model opus
+```
+
+You can interact with each agent in its terminal window.
+
+### Headless Mode
+
+Launch agents in the background with a prompt:
+
+```bash
+hcom claude -p "analyze the test failures"
+hcom 3 claude -p "fix the auth bug" --output-format json
+```
+
+Headless agents:
+- Run completely in the background
+- Process the prompt and stop when done
+- Ideal for parallel task execution
+
+<Steps>
+
+### Launch headless agents
+
+```bash
+hcom 3 claude -p "run the test suite"
+```
+
+### Check their status
+
+```bash
+hcom list
+```
+
+### View their output
+
+```bash
+hcom transcript @luna
+```
+
+</Steps>
+
+## Grouping with Tags
+
+Organize agents into teams using tags:
+
+```bash
+hcom 3 claude --tag reviewers
+```
+
+This creates agents named `reviewers-luna`, `reviewers-nova`, `reviewers-kira`.
+
+Address the entire group:
+
+```bash
+hcom send @reviewers -- "Review the PR changes"
+```
+
+## Launch Options
+
+### System Prompts
+
+Customize agent behavior with system prompts:
+
+```bash
+hcom claude --hcom-system-prompt "You are a code reviewer focused on security"
+```
+
+### Initial Prompts
+
+Provide an initial task for the agent:
+
+```bash
+hcom claude --hcom-prompt "Analyze the authentication flow"
+```
+
+### Custom Terminal
+
+Choose where new agents open:
+
+```bash
+hcom config terminal kitty       # Use kitty terminal
+hcom config terminal wezterm     # Use wezterm
+hcom config terminal tmux        # Use tmux sessions
+```
+
+Supported terminals:
+- **kitty** (split, tab, window modes)
+- **wezterm** (split, tab, window modes)
+- **tmux** (background sessions)
+- **Terminal.app**, **iTerm**, **Ghostty**, **alacritty**
+
+## Resume and Fork
+
+### Resume a Stopped Agent
+
+Resume a previously stopped agent by name:
+
+```bash
+hcom r luna        # Resumes the 'luna' agent
+```
+
+The agent restarts with its full memory and context intact.
+
+### Fork an Agent
+
+Create a copy of an agent's session (Claude only):
+
+```bash
+hcom f luna        # Creates a fork of 'luna' with shared memory
+```
+
+Use cases:
+- Explore alternative approaches
+- Investigate bugs in parallel
+- Create specialized reviewers
+
+<Note>
+Forked agents share the same transcript/memory as the original but run independently.
+</Note>
+
+## Launch Coordination
+
+When launching multiple agents, they're grouped with a batch ID:
+
+```bash
+hcom 3 claude --tag workers --go
+```
+
+Output:
+```
+Started the launch process for 3 Claude agents
+Names: workers-luna, workers-nova, workers-kira
+Batch id: batch-1234567890
+To block until ready or fail (30s timeout), run: hcom events launch
+```
+
+Wait for all agents in the batch to be ready:
+
+```bash
+hcom events launch batch-1234567890
+```
+
+## Working Directory
+
+Launch agents in a specific directory:
+
+```bash
+cd ~/my-project
+hcom claude        # Launches in ~/my-project
+```
+
+Or specify explicitly:
+
+```bash
+hcom claude -C ~/my-project
+```
+
+## Troubleshooting
+
+### Launch Fails
+
+Check if hooks are installed:
+
+```bash
+hcom hooks status
+```
+
+Add hooks if missing:
+
+```bash
+hcom hooks add all
+```
+
+### Agents Not Communicating
+
+Verify agents are registered:
+
+```bash
+hcom list
+```
+
+Check recent activity:
+
+```bash
+hcom events --last 20
+```
+
+### Too Many Open Terminals
+
+Use headless mode for background tasks:
+
+```bash
+hcom 5 claude -p "analyze the logs" --headless
+```
+
+## Best Practices
+
+<Tip>
+- Use **tags** to organize agents by role (reviewers, testers, debuggers)
+- Use **headless mode** for parallel batch processing
+- Use **resume** to continue work without losing context
+- Use **fork** to explore alternative solutions
+</Tip>
+
+<Warning>
+Launching too many interactive agents (>10) can overwhelm your window manager. Use headless mode for large batches.
+</Warning>
+
+## Next Steps
+
+- [Send messages between agents](/guides/sending-messages)
+- [Subscribe to agent events](/guides/event-subscriptions)
+- [Read agent transcripts](/guides/transcripts)

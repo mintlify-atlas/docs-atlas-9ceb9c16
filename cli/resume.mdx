@@ -1,0 +1,291 @@
+---
+title: 'hcom r'
+description: 'Resume stopped agents'
+---
+
+## Overview
+
+Resume a stopped agent by relaunching it with full session history. Alias for `hcom resume`.
+
+## Syntax
+
+```bash
+hcom r <NAME> [TOOL_ARGS]
+```
+
+<ParamField path="NAME" type="string" required>
+  Name of stopped instance to resume
+  
+  Must exist in stopped events (`hcom list --stopped`)
+</ParamField>
+
+<ParamField path="TOOL_ARGS" type="string[]" optional>
+  Tool-specific arguments to override or merge with original launch args
+  
+  ```bash
+  hcom r luna --model opus
+  ```
+</ParamField>
+
+## Flags
+
+<ParamField path="--tag" type="string">
+  Override original tag
+  
+  ```bash
+  hcom r luna --tag new-team
+  ```
+</ParamField>
+
+<ParamField path="--terminal" type="string">
+  Override terminal preset
+  
+  ```bash
+  hcom r luna --terminal kitty-tab
+  ```
+</ParamField>
+
+<ParamField path="--go" type="boolean">
+  Skip confirmation (when applicable)
+</ParamField>
+
+<ParamField path="--name" type="string">
+  Launcher identity (who initiated resume)
+</ParamField>
+
+## What Gets Restored
+
+### From Stopped Snapshot
+
+- **Session ID** - Full conversation history
+- **Tool** - Original tool (claude/gemini/codex/opencode)
+- **Launch Args** - Original arguments (merged with new args)
+- **Tag** - Original tag (unless overridden)
+- **Background Mode** - Headless vs interactive
+- **Event Cursor** - `last_event_id` to deliver pending messages
+
+### What's New
+
+- **Process ID** - Fresh OS process
+- **Terminal Window** - New pane/tab/window
+- **Bootstrap** - Includes "YOUR SESSION HAS BEEN RESUMED!" message
+
+## Tool-Specific Behavior
+
+### Claude
+
+Uses `--resume <session-id>` to restore conversation:
+
+```bash
+hcom r luna
+# Launches: claude --resume sess_abc123
+```
+
+Merges original args:
+```bash
+# Original: hcom claude --model haiku
+# Stopped, then:
+hcom r luna --verbose
+# Launches: claude --resume sess_abc123 --model haiku --verbose
+```
+
+### Gemini
+
+Uses `--resume <session-id>`:
+
+```bash
+hcom r nova
+# Launches: gemini --resume sess_def456
+```
+
+### Codex
+
+Uses `resume` subcommand:
+
+```bash
+hcom r kira
+# Launches: codex resume sess_ghi789
+```
+
+### OpenCode
+
+Uses `--session <session-id>`:
+
+```bash
+hcom r zeus
+# Launches: opencode --session sess_jkl012
+```
+
+## Argument Merging
+
+Original launch args are merged with new args. New args take precedence for conflicting flags.
+
+```bash
+# Original launch
+hcom claude --model haiku --verbose
+
+# Stop, then resume with override
+hcom r luna --model opus
+# Final: claude --resume sess_abc123 --model opus --verbose
+```
+
+## Error Cases
+
+### Instance Still Active
+
+```bash
+hcom r luna
+# Error: 'luna' is still active — run hcom stop luna first
+```
+
+Solution: Stop first, then resume:
+```bash
+hcom stop luna
+hcom r luna
+```
+
+### No Session ID
+
+```bash
+hcom r orphan-agent
+# Error: No session ID found for 'orphan-agent' — cannot resume
+```
+
+Solution: Orphans without session history cannot be resumed. Use `hcom start --orphan` instead.
+
+### Not Found
+
+```bash
+hcom r nonexistent
+# Error: No stopped snapshot found for 'nonexistent'
+```
+
+Solution: Check stopped instances:
+```bash
+hcom list --stopped
+```
+
+## Examples
+
+### Basic Resume
+
+```bash
+# Stop agent
+hcom stop luna
+# Output: Stopped hcom for luna.
+
+# Resume
+hcom r luna
+# Output: Resumed luna (claude)
+
+# Agent sees:
+# [hcom:luna]
+# YOUR SESSION HAS BEEN RESUMED! You are still 'luna'.
+# ...
+```
+
+### Resume with Model Override
+
+```bash
+hcom r luna --model opus
+# Launches with opus instead of original model
+```
+
+### Resume Headless Agent
+
+```bash
+# Original: hcom claude -p "Fix tests"
+# Stopped, then:
+hcom r luna -p "Continue fixing tests"
+# Resumes headless with new prompt
+```
+
+### Resume with Tag Override
+
+```bash
+hcom r luna --tag new-experiment
+# Launches as new-experiment-luna
+```
+
+### Resume with Terminal Override
+
+```bash
+hcom r luna --terminal tmux
+# Opens in tmux session instead of original terminal
+```
+
+### View Available Resumes
+
+```bash
+hcom list --stopped
+# Output:
+# Stopped instances (last 20):
+#
+#   luna (claude) 5m ago  [self by:luna]
+#   nova (gemini tag:dev) 10m ago  [external by:kira]
+#
+#   Details: hcom list --stopped <name>
+#   Resume:  hcom r <name>
+
+hcom list --stopped luna
+# Output:
+# Stopped: luna
+#   Time:       2026-03-04T10:23:45Z
+#   By:         luna
+#   Reason:     self
+#   Tool:       claude
+#   Session:    sess_abc123
+#   Transcript: ~/.claude/sessions/sess_abc123/transcript.jsonl
+#
+#   Resume: hcom r luna
+```
+
+## Exit Codes
+
+<ResponseField name="0" type="success">
+  Agent resumed successfully
+</ResponseField>
+
+<ResponseField name="1" type="error">
+  - Instance still active (must stop first)
+  - No stopped snapshot found
+  - No session ID in snapshot
+  - Launch failed
+</ResponseField>
+
+## Notes
+
+<Note>
+  **Cursor Restoration**: Resume restores `last_event_id` cursor, so pending messages sent while stopped are delivered immediately.
+</Note>
+
+<Note>
+  **Session Continuity**: The tool sees its full conversation history. hcom injects "YOUR SESSION HAS BEEN RESUMED!" in system prompt.
+</Note>
+
+<Note>
+  **Active Check**: Resume fails if instance is still active. Always stop first to avoid conflicts.
+</Note>
+
+<Note>
+  **Headless Logs**: If original was headless, new instance creates a fresh log file in `~/.hcom/.tmp/logs/`.
+</Note>
+
+<Note>
+  **Argument Precedence**: New CLI args override original args for the same flag. Non-conflicting args are merged.
+</Note>
+
+<Note>
+  **Tag Override**: `--tag` changes the instance name. `hcom r luna --tag team` creates `team-luna`, not `luna`.
+</Note>
+
+<Note>
+  **Launcher Identity**: Resume is attributed to the caller. View with `hcom list --stopped <name>` to see who resumed.
+</Note>
+
+## Related Commands
+
+- [`hcom f`](/cli/fork) - Fork agent session (clone history)
+- [`hcom list --stopped`](/cli/list) - View stopped instances
+- [`hcom stop`](/cli/stop) - Stop active agents
+- [`hcom start --as`](/cli/start) - Rebind identity without history

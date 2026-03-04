@@ -1,0 +1,322 @@
+---
+title: 'hcom reset'
+description: 'Archive and clear database, reset hcom state'
+---
+
+## Overview
+
+`hcom reset` archives the current session and clears the database. Use this to start fresh while preserving history.
+
+## Usage
+
+```bash
+hcom reset              # Archive conversation, clear database
+hcom reset hooks        # Remove hooks only
+hcom reset all          # Nuclear option: stop all + clear + remove hooks + reset config
+```
+
+## Standard Reset
+
+```bash
+hcom reset
+```
+
+**What it does:**
+
+<Steps>
+  <Step title="Stop all instances">
+    Kills all local hcom-tracked instances and closes terminal panes.
+  </Step>
+  <Step title="Archive database">
+    Copies `hcom.db` to `~/.hcom/archive/session-{timestamp}/`.
+  </Step>
+  <Step title="Clear database">
+    Deletes `hcom.db`, `hcom.db-wal`, `hcom.db-shm`.
+  </Step>
+  <Step title="Log reset event">
+    Creates fresh database with reset event logged.
+  </Step>
+  <Step title="Sync relay">
+    Pushes reset event to remote devices (if relay enabled).
+  </Step>
+</Steps>
+
+**Output:**
+
+```
+Archived to ~/.hcom/archive/session-2026-03-04_143022/
+Started fresh HCOM conversation
+```
+
+## Reset Hooks
+
+```bash
+hcom reset hooks
+```
+
+Removes hcom hooks from all tool configs:
+
+- Claude Code (`~/.claude/settings.json`)
+- Gemini CLI (`~/.gemini/settings.json`)
+- Codex (`~/.codex/`)
+- OpenCode (`~/.config/opencode/`)
+
+<Note>
+  Hooks are automatically reinstalled when you run any hcom command. Use this to clean up if hooks are causing issues.
+</Note>
+
+## Reset All
+
+```bash
+hcom reset all
+```
+
+**Nuclear option.** Completely resets hcom to factory state:
+
+<Steps>
+  <Step title="Stop all instances">
+    Kills processes, logs snapshots.
+  </Step>
+  <Step title="Archive database">
+    Saves to `~/.hcom/archive/session-{timestamp}/`.
+  </Step>
+  <Step title="Clear database">
+    Deletes `hcom.db`.
+  </Step>
+  <Step title="Remove hooks">
+    Removes hooks from all tools.
+  </Step>
+  <Step title="Reset config">
+    Archives and deletes `config.toml` and `config.env`.
+  </Step>
+  <Step title="Clear device identity">
+    Deletes device UUID (new ID on next relay connection).
+  </Step>
+  <Step title="Clear instance counter">
+    Resets agent name counter.
+  </Step>
+</Steps>
+
+**When to use:**
+
+- Starting completely fresh
+- Troubleshooting persistent issues
+- Before uninstalling hcom
+- After testing/experimenting
+
+## Confirmation Gate
+
+Inside AI tools, `hcom reset` requires `--go` flag:
+
+```bash
+hcom reset --go
+hcom reset hooks --go
+hcom reset all --go
+```
+
+This prevents accidental resets. You'll see a preview first:
+
+```
+== RESET PREVIEW ==
+This will archive and clear the current hcom session.
+
+Current state:
+  • 3 instances: luna, nova, kira
+  • 127 events in database
+
+Actions:
+  1. Archive database to ~/.hcom/archive/session-<timestamp>/
+  2. Delete database (hcom.db, hcom.db-wal, hcom.db-shm)
+  3. Log reset event to fresh database
+  4. Sync with relay (push reset, pull fresh state)
+
+Note: Instance rows are deleted but snapshots preserved in archive.
+      Query archived sessions with: hcom archive
+
+Add --go flag and run again to proceed:
+  hcom --go reset
+```
+
+## Archive vs Reset
+
+<CardGroup cols={2}>
+  <Card title="Archive (hcom archive)" icon="box-archive">
+    **Read-only**. Query past sessions without affecting current state.
+    
+    ```bash
+    hcom archive
+    hcom archive 1
+    ```
+  </Card>
+  <Card title="Reset (hcom reset)" icon="rotate-left">
+    **Destructive**. Archives current session and clears database.
+    
+    ```bash
+    hcom reset
+    hcom reset all
+    ```
+  </Card>
+</CardGroup>
+
+## What Gets Archived
+
+### Included
+
+- All events (messages, status changes, lifecycle)
+- All instance records (names, sessions, directories)
+- Read receipts
+- Subscriptions
+
+### Not Included
+
+- Transcripts (stored separately in tool directories)
+- Config files (unless `reset all`)
+- Launched processes (stopped before archive)
+
+## Cleanup
+
+`hcom reset` also cleans temporary files:
+
+- Launch scripts >24 hours old
+- Prompt temp files >24 hours old
+- Background logs >30 days old
+
+## Sandbox Mode
+
+If using `HCOM_DIR` for project-local hcom:
+
+```bash
+export HCOM_DIR="$PWD/.hcom"
+hcom reset                      # Resets local instance
+```
+
+To completely remove:
+
+```bash
+hcom hooks remove && rm -rf "$HCOM_DIR"
+```
+
+## Examples
+
+<CodeGroup>
+
+```bash Standard reset
+hcom reset
+# Stops all, archives, clears DB
+```
+
+```bash With confirmation
+hcom --go reset
+# Inside AI tool, requires --go
+```
+
+```bash Reset hooks only
+hcom reset hooks
+# Removes hooks, keeps data
+```
+
+```bash Nuclear option
+hcom reset all
+# Factory reset
+```
+
+```bash Check before reset
+hcom list                       # See active agents
+hcom events --last 50           # See recent activity
+hcom reset                      # Then reset
+```
+
+</CodeGroup>
+
+## Recovery
+
+### Restore from Archive
+
+Archives are read-only. To restore:
+
+1. Find the archive:
+
+```bash
+hcom archive
+```
+
+2. Copy database:
+
+```bash
+cp ~/.hcom/archive/session-2026-03-04_143022/hcom.db ~/.hcom/hcom.db
+```
+
+3. Restart agents manually (transcripts still exist)
+
+<Warning>
+  Restoring from archive does NOT restart agents or restore PIDs. You'll need to manually relaunch.
+</Warning>
+
+### Undo Reset Hooks
+
+```bash
+hcom hooks add
+# Or
+hcom hooks add claude
+hcom hooks add gemini
+```
+
+### Undo Reset All
+
+No automatic undo. You'll need to:
+
+1. Restore database (see above)
+2. Reinstall hooks: `hcom hooks add`
+3. Reconfigure: `hcom config`
+4. Reconnect relay: `hcom relay connect <token>`
+
+## Tips
+
+<Tip>
+  Reset before starting new projects to keep archives organized.
+</Tip>
+
+<Tip>
+  Use `hcom archive --here` to filter archives by directory after reset.
+</Tip>
+
+<Warning>
+  `reset all` clears device identity. You'll get a new UUID on next relay connection.
+</Warning>
+
+## Troubleshooting
+
+### "No HCOM conversation to clear"
+
+Database is already empty. Nothing to archive.
+
+### "Error: Failed to archive"
+
+Check permissions on `~/.hcom/archive/`. Create manually:
+
+```bash
+mkdir -p ~/.hcom/archive
+```
+
+### Hooks not removed
+
+If `reset hooks` fails, manually remove:
+
+```bash
+hcom hooks remove all
+```
+
+Or edit tool config files directly:
+
+- `~/.claude/settings.json`
+- `~/.gemini/settings.json`
+- `~/.codex/`
+- `~/.config/opencode/`
+
+### Relay still syncing after reset
+
+Reset pushes a reset event to relay. Remote devices will see the reset and clear their sync state. If issues persist:
+
+```bash
+hcom relay daemon restart
+```

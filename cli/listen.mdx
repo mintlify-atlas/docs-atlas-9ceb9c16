@@ -1,0 +1,381 @@
+---
+title: hcom listen
+description: Block and wait for messages or events matching filters
+---
+
+## Overview
+
+Block until a message arrives or an event matches filters. Used by agents to receive messages and by scripts to wait for specific conditions.
+
+## Basic Usage
+
+```bash
+# Wait for messages (24h timeout)
+hcom listen
+
+# Wait with 5 second timeout
+hcom listen 5
+
+# Quick check for unread messages (0.1s timeout)
+hcom listen 1
+```
+
+## Timeout
+
+<ParamField path="timeout" type="number" default="86400">
+  Timeout in seconds (positional or `--timeout` flag)
+  
+  Default: 86400 seconds (24 hours)
+  
+  ```bash
+  hcom listen 60        # 60 second timeout
+  hcom listen --timeout 300   # 5 minute timeout
+  ```
+  
+  **Quick check mode:** Timeout ≤ 1 second becomes 0.1s poll
+</ParamField>
+
+## Output Formats
+
+<ParamField path="--json" type="boolean">
+  Output messages as JSON (one per line)
+  
+  ```bash
+  hcom listen --json
+  ```
+  
+  Output format:
+  ```json
+  {"from": "luna", "text": "message content"}
+  ```
+</ParamField>
+
+### Default Output
+
+Human-readable format with intent/thread context:
+
+```
+[request #42] luna → nova: Can you review PR #99?
+
+[inform:standup] kira → all: Daily update complete
+
+[3 new messages] | [request #50] luna → nova: msg1 | [inform] kira → nova: msg2
+```
+
+## Filter Mode
+
+Wait for events matching filter conditions. Supports all `hcom events` filter flags:
+
+### Event Type Filters
+
+<ParamField path="--type" type="string">
+  Event type: `message`, `status`, `life`
+  
+  ```bash
+  hcom listen --type message --timeout 30
+  hcom listen --type status --agent luna
+  ```
+</ParamField>
+
+<ParamField path="--agent" type="string">
+  Filter by agent name
+  
+  ```bash
+  hcom listen --agent luna --timeout 60
+  ```
+</ParamField>
+
+### Message Filters
+
+<ParamField path="--from" type="string">
+  Message sender name
+  
+  ```bash
+  hcom listen --from luna --timeout 30
+  ```
+</ParamField>
+
+<ParamField path="--mention" type="string">
+  Messages mentioning target
+  
+  ```bash
+  hcom listen --mention @nova
+  ```
+</ParamField>
+
+<ParamField path="--intent" type="enum">
+  Message intent: `request`, `inform`, `ack`
+  
+  ```bash
+  hcom listen --intent request
+  ```
+</ParamField>
+
+<ParamField path="--thread" type="string">
+  Thread name
+  
+  ```bash
+  hcom listen --thread pr-99
+  ```
+</ParamField>
+
+### Status Filters
+
+<ParamField path="--status" type="enum">
+  Agent status: `listening`, `active`, `blocked`, `inactive`
+  
+  ```bash
+  hcom listen --status blocked
+  ```
+</ParamField>
+
+<ParamField path="--context" type="string">
+  Status context (supports wildcard `*`)
+  
+  ```bash
+  hcom listen --context "tool:Bash"
+  hcom listen --context "deliver:*"
+  ```
+</ParamField>
+
+### Activity Filters
+
+<ParamField path="--cmd" type="string">
+  Shell command pattern
+  
+  Supports patterns:
+  - `contains` - default
+  - `^prefix` - starts with
+  - `$suffix` - ends with
+  - `=exact` - exact match
+  - `*glob` - glob pattern
+  
+  ```bash
+  hcom listen --cmd "git push"
+  hcom listen --cmd "^npm"
+  ```
+</ParamField>
+
+<ParamField path="--file" type="string">
+  File write/edit events
+  
+  Supports glob patterns:
+  
+  ```bash
+  hcom listen --file "*.py"
+  hcom listen --file "src/auth.py"
+  ```
+</ParamField>
+
+<ParamField path="--collision" type="boolean">
+  File edit collisions (two agents edit same file within 30s)
+  
+  ```bash
+  hcom listen --collision
+  ```
+</ParamField>
+
+### Lifecycle Filters
+
+<ParamField path="--action" type="enum">
+  Lifecycle action: `created`, `started`, `ready`, `stopped`, `batch_launched`
+  
+  ```bash
+  hcom listen --action stopped --agent luna
+  ```
+</ParamField>
+
+### Time Filters
+
+<ParamField path="--after" type="string">
+  Events after timestamp (ISO-8601)
+  
+  ```bash
+  hcom listen --after 2026-01-01T12:00:00Z
+  ```
+</ParamField>
+
+<ParamField path="--before" type="string">
+  Events before timestamp (ISO-8601)
+  
+  ```bash
+  hcom listen --before 2026-01-01T12:00:00Z
+  ```
+</ParamField>
+
+### Custom SQL
+
+<ParamField path="--sql" type="string">
+  Raw SQL WHERE clause against `events_v` view
+  
+  Combined with filter flags using AND logic.
+  
+  ```bash
+  hcom listen --sql "type='status' AND status_val='blocked'"
+  ```
+</ParamField>
+
+### Shortcuts
+
+<ParamField path="--idle" type="string">
+  Wait for agent to go idle (listening status)
+  
+  Equivalent to: `--agent NAME --status listening`
+  
+  ```bash
+  hcom listen --idle luna --timeout 300
+  ```
+</ParamField>
+
+<ParamField path="--blocked" type="string">
+  Wait for agent to be blocked (needs approval)
+  
+  Equivalent to: `--agent NAME --status blocked`
+  
+  ```bash
+  hcom listen --blocked nova
+  ```
+</ParamField>
+
+## Examples
+
+### Basic Message Waiting
+
+```bash
+# Wait for any message
+hcom listen
+
+# Quick check (0.1s poll)
+hcom listen 1
+
+# Wait 5 minutes
+hcom listen 300
+```
+
+### Workflow Coordination
+
+```bash
+# Wait for agent to finish and go idle
+hcom listen --idle luna --timeout 600
+if [ $? -eq 0 ]; then
+  echo "Luna is idle, sending next task"
+  hcom send @luna -- Next task: run tests
+fi
+
+# Wait for agent to stop
+hcom listen --sql "stopped:luna" --timeout 300
+```
+
+### Message Monitoring
+
+```bash
+# Wait for request from luna
+hcom listen --from luna --intent request
+
+# Wait for mention in thread
+hcom listen --mention @nova --thread pr-99
+
+# Wait for broadcast message
+hcom listen --type message --sql "json_extract(data, '$.scope') = 'broadcast'"
+```
+
+### Activity Monitoring
+
+```bash
+# Wait for file edit
+hcom listen --file "src/auth.py" --timeout 300
+
+# Wait for any Python file edit
+hcom listen --file "*.py"
+
+# Wait for git command
+hcom listen --cmd "git" --agent luna
+
+# Wait for collision
+hcom listen --collision
+```
+
+### Status Changes
+
+```bash
+# Wait for agent to be blocked (needs approval)
+hcom listen --blocked nova --timeout 120
+
+# Wait for tool completion
+hcom listen --agent luna --context "tool:Bash" --timeout 60
+
+# Wait for agent startup
+hcom listen --action ready --agent nova
+```
+
+### JSON Output for Scripts
+
+```bash
+# Parse message in script
+MSG=$(hcom listen --json --timeout 30)
+if [ $? -eq 0 ]; then
+  FROM=$(echo "$MSG" | jq -r '.from')
+  TEXT=$(echo "$MSG" | jq -r '.text')
+  echo "Message from $FROM: $TEXT"
+fi
+```
+
+### Filter Combinations
+
+```bash
+# Multiple filter flags (AND logic)
+hcom listen --agent luna --type status --context "tool:*"
+
+# Flags + SQL
+hcom listen --agent nova --sql "json_extract(data, '$.detail') LIKE '%error%'"
+
+# Wait for specific file edit by specific agent
+hcom listen --agent luna --file "config.json"
+```
+
+## Exit Codes
+
+- **0** - Message/event received
+- **1** - Timeout or error
+- **130** - Interrupted (SIGTERM)
+
+## Behavior
+
+### Message Delivery
+
+- Sets agent status to `listening` during wait
+- Advances read cursor when messages arrive
+- Returns immediately if unread messages exist
+- Wakes instantly on new messages (TCP notify + relay)
+
+### Heartbeat
+
+Updates `last_stop` timestamp periodically so stale cleanup doesn't disconnect the agent.
+
+### Lookback Window
+
+Filter mode checks last 10 seconds for recent matches before waiting.
+
+### Status Updates
+
+- **listening** → **active** when message received
+- **adhoc** tools: marked **inactive** on timeout
+
+### Remote Sync
+
+With relay enabled:
+- Long-polls MQTT for remote events (25s)
+- Short TCP select for local notifications (1s)
+
+Local-only:
+- TCP select wakes on notification (30s)
+- No TCP: frequent polling (100ms)
+
+## Notes
+
+- Requires `hcom start` for identity
+- Filter mode uses temporary subscription (auto-cleanup)
+- Multiple filter flags combine with AND logic
+- Supports `events_v` SQL view (computed columns)
+- Quick timeout ≤1s becomes 0.1s poll mode
+- SIGTERM triggers clean shutdown with exit code 130

@@ -1,0 +1,557 @@
+---
+title: Event System
+description: Event types, storage, and querying in hcom
+---
+
+## Event Types
+
+hcom logs three types of events:
+
+<CardGroup cols={3}>
+  <Card title="message" icon="message">
+    Inter-agent communication
+  </Card>
+  <Card title="status" icon="signal">
+    Agent state changes
+  </Card>
+  <Card title="life" icon="heart-pulse">
+    Lifecycle events
+  </Card>
+</CardGroup>
+
+## Event Structure
+
+### Database Schema
+
+Events are stored in the `events` table:
+
+```sql
+CREATE TABLE events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    type TEXT NOT NULL,
+    instance TEXT NOT NULL,
+    data TEXT NOT NULL  -- JSON blob
+);
+
+CREATE INDEX idx_type_instance ON events(type, instance);
+CREATE INDEX idx_timestamp ON events(timestamp);
+```
+
+### Events View
+
+Flattened view for querying:
+
+```sql
+CREATE VIEW events_v AS
+SELECT
+    id, timestamp, type, instance, data,
+    
+    -- Message fields
+    json_extract(data, '$.from') as msg_from,
+    json_extract(data, '$.text') as msg_text,
+    json_extract(data, '$.scope') as msg_scope,
+    json_extract(data, '$.mentions') as msg_mentions,
+    json_extract(data, '$.intent') as msg_intent,
+    json_extract(data, '$.thread') as msg_thread,
+    json_extract(data, '$.reply_to') as msg_reply_to,
+    
+    -- Status fields
+    json_extract(data, '$.status') as status_val,
+    json_extract(data, '$.context') as status_context,
+    json_extract(data, '$.detail') as status_detail,
+    
+    -- Life fields
+    json_extract(data, '$.action') as life_action,
+    json_extract(data, '$.by') as life_by,
+    json_extract(data, '$.batch_id') as life_batch_id,
+    json_extract(data, '$.reason') as life_reason
+FROM events;
+```
+
+## Message Events
+
+### Structure
+
+```json
+{
+  "type": "message",
+  "instance": "sys_luna",
+  "timestamp": "2024-01-01T12:00:00Z",
+  "data": {
+    "from": "luna",
+    "text": "hello @nova",
+    "scope": "mentions",
+    "mentions": ["nova"],
+    "sender_kind": "instance",
+    "delivered_to": ["nova"],
+    "intent": "request",
+    "thread": "pr-123",
+    "reply_to": "42",
+    "bundle_id": "bundle:abc123"
+  }
+}
+```
+
+### Sender Kinds
+
+<Tabs>
+  <Tab title="instance">
+    Sent by a registered agent.
+    
+    ```json
+    {
+      "from": "luna",
+      "sender_kind": "instance"
+    }
+    ```
+  </Tab>
+  
+  <Tab title="external">
+    Sent by ad-hoc process using `--from`.
+    
+    ```json
+    {
+      "from": "deploy-bot",
+      "sender_kind": "external"
+    }
+    ```
+  </Tab>
+  
+  <Tab title="system">
+    System notification (batch complete, collision, etc.).
+    
+    ```json
+    {
+      "from": "[hcom-launcher]",
+      "sender_kind": "system"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Message Scopes
+
+- **broadcast**: Delivered to all agents
+- **mentions**: Delivered to specific agents in `mentions` array
+
+### Message Intents
+
+- **request**: Expect response (creates request-watch subscription)
+- **inform**: FYI, no response needed
+- **ack**: Reply to request (requires `reply_to`)
+
+## Status Events
+
+### Structure
+
+```json
+{
+  "type": "status",
+  "instance": "luna",
+  "timestamp": "2024-01-01T12:00:00Z",
+  "data": {
+    "status": "active",
+    "context": "tool:Bash",
+    "detail": "",
+    "position": 1234
+  }
+}
+```
+
+### Status Values
+
+<Tabs>
+  <Tab title="listening">
+    Agent is idle and ready to receive messages.
+    
+    ```json
+    {
+      "status": "listening",
+      "context": "",
+      "detail": ""
+    }
+    ```
+    
+    Common contexts:
+    - `""` - Normal idle
+    - `"suspended"` - Background process paused
+    - `"tui:not-ready"` - TUI blocked
+  </Tab>
+  
+  <Tab title="active">
+    Agent is processing.
+    
+    ```json
+    {
+      "status": "active",
+      "context": "tool:Bash",
+      "detail": "ls -la"
+    }
+    ```
+    
+    Common contexts:
+    - `"tool:{name}"` - Executing tool
+    - `"deliver:{sender}"` - Processing message
+    - `"approved:{tool}"` - Approval granted
+  </Tab>
+  
+  <Tab title="blocked">
+    Agent needs human approval.
+    
+    ```json
+    {
+      "status": "blocked",
+      "context": "pty:approval",
+      "detail": "Bash: rm -rf /"
+    }
+    ```
+    
+    Common contexts:
+    - `"pty:approval"` - Tool approval pending
+    - `"approval"` - Generic approval
+  </Tab>
+  
+  <Tab title="inactive">
+    Agent is stopped or stale.
+    
+    ```json
+    {
+      "status": "inactive",
+      "context": "exit:0",
+      "detail": "Session ended normally"
+    }
+    ```
+    
+    Common contexts:
+    - `"exit:0"` - Normal exit
+    - `"exit:1"` - Error exit
+    - `"stale:listening"` - Heartbeat timeout
+    - `"killed"` - Killed by user
+  </Tab>
+</Tabs>
+
+## Life Events
+
+### Structure
+
+```json
+{
+  "type": "life",
+  "instance": "luna",
+  "timestamp": "2024-01-01T12:00:00Z",
+  "data": {
+    "action": "ready",
+    "by": "nova",
+    "batch_id": "batch-abc",
+    "reason": "User requested"
+  }
+}
+```
+
+### Life Actions
+
+<Tabs>
+  <Tab title="created">
+    Instance placeholder created during launch.
+    
+    ```json
+    {
+      "action": "created",
+      "by": "nova",
+      "batch_id": "batch-abc"
+    }
+    ```
+  </Tab>
+  
+  <Tab title="ready">
+    Instance bound to session and operational.
+    
+    ```json
+    {
+      "action": "ready",
+      "by": "nova",
+      "status": "listening",
+      "context": "",
+      "batch_id": "batch-abc"
+    }
+    ```
+    
+    Triggers batch completion check.
+  </Tab>
+  
+  <Tab title="stopped">
+    Instance session ended.
+    
+    ```json
+    {
+      "action": "stopped",
+      "reason": "exit:0"
+    }
+    ```
+    
+    Logged by SessionEnd hook or cleanup.
+  </Tab>
+  
+  <Tab title="batch_launched">
+    Batch of instances launched.
+    
+    ```json
+    {
+      "action": "batch_launched",
+      "launched": 3,
+      "batch_id": "batch-abc",
+      "by": "nova"
+    }
+    ```
+    
+    Used for batch completion tracking.
+  </Tab>
+</Tabs>
+
+## Event Querying
+
+### CLI Query
+
+```bash
+# Last 20 events
+hcom events
+
+# Filter by type
+hcom events --type message
+hcom events --type status --status listening
+hcom events --type life --action stopped
+
+# Filter by agent
+hcom events --agent luna
+
+# Filter by sender
+hcom events --from nova
+
+# Filter by content
+hcom events --cmd git
+hcom events --file '*.py'
+hcom events --context 'tool:Bash'
+
+# Time range
+hcom events --after 2024-01-01T12:00:00Z
+hcom events --before 2024-01-01T13:00:00Z
+
+# Collision detection
+hcom events --collision
+
+# Raw SQL
+hcom events --sql "type='message' AND msg_intent='request'"
+```
+
+### Programmatic Query
+
+```rust
+// Get unread messages
+let messages = db.get_unread_messages("luna");
+
+// Query by type
+let mut stmt = db.conn().prepare(
+    "SELECT * FROM events_v WHERE type = ? ORDER BY id DESC LIMIT 20"
+)?;
+let events = stmt.query_map(["message"], |row| {
+    // ...
+})?;
+
+// Full-text search
+let mut stmt = db.conn().prepare(
+    "SELECT e.* FROM events e 
+     JOIN events_fts fts ON e.id = fts.rowid 
+     WHERE events_fts MATCH ?"
+)?;
+let results = stmt.query_map(["error"], |row| {
+    // ...
+})?;
+```
+
+## Event Subscriptions
+
+Subscribe to events for real-time notifications:
+
+### Create Subscription
+
+```bash
+# Notify when agent goes idle
+hcom events sub --idle luna
+
+# Notify on file write
+hcom events sub --file '*.py'
+
+# Notify on message from sender
+hcom events sub --from nova --type message
+
+# One-shot subscription
+hcom events sub --idle luna --once
+
+# Raw SQL subscription
+hcom events sub "type='status' AND status_val='blocked'"
+```
+
+### Subscription Format
+
+Stored in KV table:
+
+```json
+{
+  "id": "sub-abc",
+  "caller": "nova",
+  "sql": "(type='status' AND instance=? AND status_val='listening')",
+  "params": ["luna"],
+  "filters": {
+    "idle": "luna"
+  },
+  "created": 1704110400.0,
+  "last_id": 1234,
+  "once": true
+}
+```
+
+### Subscription Delivery
+
+When event matches subscription:
+
+```rust
+// Check active subscriptions
+for (key, value) in db.kv_iter_prefix("events_sub:") {
+    let sub: Subscription = serde_json::from_str(&value)?;
+    
+    // Check SQL filter
+    if db.check_event_matches(&sub.sql, &sub.params, event_id) {
+        // Send notification
+        db.log_event("message", &format!("sys_{}", sub.caller), &serde_json::json!({
+            "from": "[hcom-events]",
+            "text": format!("Subscription matched: {} (event #{})", sub.id, event_id),
+            "sender_kind": "system",
+            "scope": "mentions",
+            "mentions": [sub.caller]
+        }));
+        
+        // Remove if once
+        if sub.once {
+            db.kv_delete(&key);
+        }
+    }
+}
+```
+
+## Event Storage
+
+### Retention
+
+- **Active session**: Unlimited (append-only log)
+- **Archive**: Previous sessions in `~/.hcom/archive/`
+- **Cleanup**: No automatic deletion (manual archive)
+
+### Compaction
+
+Archive and reset database:
+
+```bash
+# Archive current session and start fresh
+hcom reset
+
+# Query archived session
+hcom archive 1  # Most recent archive
+hcom archive 2  # Second most recent
+```
+
+### Full-Text Search
+
+FTS5 virtual table indexes searchable fields:
+
+```sql
+CREATE VIRTUAL TABLE events_fts USING fts5(
+    searchable,
+    tokenize='unicode61'
+);
+
+-- Trigger keeps index in sync
+CREATE TRIGGER events_fts_insert
+AFTER INSERT ON events BEGIN
+    INSERT INTO events_fts(rowid, searchable) VALUES (
+        new.id,
+        json_extract(new.data, '$.text') || ' ' ||
+        json_extract(new.data, '$.from') || ' ' ||
+        new.instance || ' ' ||
+        json_extract(new.data, '$.context') || ' ' ||
+        json_extract(new.data, '$.detail')
+    );
+END;
+```
+
+## Event Context Tracking
+
+### Tool Execution
+
+Pre and Post hooks log tool events:
+
+```rust
+// Pre hook: status event
+db.log_event("status", "luna", &serde_json::json!({
+    "status": "active",
+    "context": "tool:Bash",
+    "detail": "ls -la"
+}));
+
+// Post hook: status event with result
+db.log_event("status", "luna", &serde_json::json!({
+    "status": "listening",
+    "context": "",
+    "detail": ""
+}));
+```
+
+### File Collision Detection
+
+Track file writes with 30s window:
+
+```rust
+// File write events
+db.log_event("status", "luna", &serde_json::json!({
+    "status": "active",
+    "context": "tool:Write",
+    "detail": json!({"path": "/tmp/file.txt"})
+}));
+
+// Check for collision
+let collision = db.conn().query_row(
+    "SELECT COUNT(*) FROM events 
+     WHERE type='status' 
+     AND status_context IN ('tool:Write', 'tool:Edit') 
+     AND json_extract(data, '$.detail.path') = ? 
+     AND timestamp > datetime('now', '-30 seconds')",
+    [path],
+    |row| row.get::<_, i64>(0)
+)?;
+
+if collision > 1 {
+    // Send collision notification
+    db.log_event("message", "sys_[hcom-events]", &collision_msg);
+}
+```
+
+## Performance
+
+### Query Performance
+
+- **Indexed queries**: < 10ms (type, instance, timestamp)
+- **Full scans**: < 100ms for 100k events
+- **FTS search**: < 50ms for complex queries
+
+### Write Performance
+
+- **Event insert**: < 5ms
+- **WAL mode**: Concurrent reads during writes
+- **Batch insert**: 1000+ events/sec
+
+### Optimization
+
+- Use `events_v` for JSON extraction caching
+- Filter by indexed columns first (type, instance)
+- Limit results for large datasets
+- Use FTS for text search (not LIKE)

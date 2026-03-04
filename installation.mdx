@@ -1,0 +1,254 @@
+---
+title: Installation
+description: Install hcom using curl, pip, or uv on macOS, Linux, or Android
+---
+
+## Quick install
+
+The fastest way to install hcom is with the install script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aannoo/hcom/main/install.sh | sh
+```
+
+This downloads the latest pre-built binary for your platform and installs it to `~/.local/bin/hcom`.
+
+## Installation methods
+
+<Tabs>
+  <Tab title="Curl (recommended)">
+    Install the pre-built binary with the install script:
+
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/aannoo/hcom/main/install.sh | sh
+    ```
+
+    <Accordion title="What the install script does">
+      1. Detects your OS and architecture
+      2. Downloads the appropriate binary from GitHub releases
+      3. Installs to `$HCOM_INSTALL_DIR` (default: `~/.local/bin`)
+      4. Makes the binary executable
+      5. Adds the install directory to your PATH if needed
+    </Accordion>
+
+    The script supports:
+    - **macOS**: x86_64 (Intel), aarch64 (Apple Silicon)
+    - **Linux**: x86_64, aarch64
+    - **Android/Termux**: aarch64
+
+    <Note>
+      On Android/Termux, the script automatically detects the platform and installs the Android-specific binary.
+    </Note>
+  </Tab>
+
+  <Tab title="pip">
+    Install from PyPI:
+
+    ```bash
+    pip install hcom
+    ```
+
+    This installs the Rust binary as a Python package. Version `0.7.1` is the latest release.
+
+    <Tip>
+      Use a virtual environment to avoid conflicts with system packages:
+      ```bash
+      python -m venv venv
+      source venv/bin/activate
+      pip install hcom
+      ```
+    </Tip>
+  </Tab>
+
+  <Tab title="uv">
+    Install with uv tool:
+
+    ```bash
+    uv tool install hcom
+    ```
+
+    This is the recommended method if you're already using [uv](https://github.com/astral-sh/uv) for Python project management.
+  </Tab>
+
+  <Tab title="Build from source">
+    Build hcom from source with Rust 1.86+:
+
+    ```bash
+    git clone https://github.com/aannoo/hcom.git
+    cd hcom
+    ./build.sh
+    ```
+
+    Link the binary to your PATH:
+
+    ```bash
+    ln -sf "$(pwd)/bin/hcom" ~/.local/bin/hcom
+    ```
+
+    <Note>
+      Building from source requires Rust 1.86 or later. Install Rust from [rustup.rs](https://rustup.rs/).
+    </Note>
+  </Tab>
+</Tabs>
+
+## Custom install directory
+
+To install to a custom directory, set the `HCOM_INSTALL_DIR` environment variable:
+
+```bash
+HCOM_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/aannoo/hcom/main/install.sh | sh
+```
+
+## Verify installation
+
+Check that hcom is installed correctly:
+
+```bash
+hcom --version
+```
+
+You should see:
+
+```
+hcom (hook-comms) v0.7.1 - multi-agent communication
+```
+
+Run diagnostics:
+
+```bash
+hcom status
+```
+
+This shows:
+- Installation status
+- Hook status for Claude Code, Gemini CLI, Codex, and OpenCode
+- Database location
+- Configuration file location
+
+## What gets installed
+
+Hooks go into `~/` (or `HCOM_DIR`) on launch or `hcom start`. If you aren't using hcom, the hooks do nothing.
+
+<CodeGroup>
+```bash Remove hooks
+hcom hooks remove  # safely remove only hcom hooks
+```
+
+```bash Sandbox mode
+HCOM_DIR=$PWD/.hcom  # for sandbox or project local
+```
+
+```bash Check status
+hcom status          # diagnostics
+```
+</CodeGroup>
+
+## Platform-specific notes
+
+<AccordionGroup>
+  <Accordion title="macOS">
+    On macOS, the installer adds `~/.local/bin` to your PATH in `~/.zshrc` (default shell on macOS 10.15+) or `~/.bashrc`.
+
+    If you use a different shell, manually add:
+
+    ```bash
+    export PATH="$HOME/.local/bin:$PATH"
+    ```
+
+    Restart your terminal or run:
+
+    ```bash
+    source ~/.zshrc  # or ~/.bashrc
+    ```
+  </Accordion>
+
+  <Accordion title="Linux">
+    On Linux, the installer adds `~/.local/bin` to your PATH in `~/.bashrc` or `~/.zshrc`.
+
+    If the binary isn't found after installation:
+
+    ```bash
+    export PATH="$HOME/.local/bin:$PATH"
+    source ~/.bashrc  # or ~/.zshrc
+    ```
+
+    On some distributions, you may need to install dependencies:
+
+    ```bash
+    # Debian/Ubuntu
+    sudo apt install libsqlite3-dev
+
+    # Fedora/RHEL
+    sudo dnf install sqlite-devel
+    ```
+  </Accordion>
+
+  <Accordion title="Android/Termux">
+    On Android with Termux, the install script automatically detects the platform and installs the Android-specific binary.
+
+    ```bash
+    # In Termux
+    curl -fsSL https://raw.githubusercontent.com/aannoo/hcom/main/install.sh | sh
+    ```
+
+    The Android binary uses Bionic libc instead of glibc and has a different dynamic linker path.
+  </Accordion>
+</AccordionGroup>
+
+## Updating hcom
+
+To update to the latest version, simply re-run the install script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aannoo/hcom/main/install.sh | sh
+```
+
+Or with pip:
+
+```bash
+pip install --upgrade hcom
+```
+
+Or with uv:
+
+```bash
+uv tool upgrade hcom
+```
+
+## Uninstalling
+
+To completely remove hcom:
+
+<Steps>
+  <Step title="Remove hooks">
+    ```bash
+    hcom hooks remove
+    ```
+  </Step>
+
+  <Step title="Remove binary">
+    ```bash
+    rm ~/.local/bin/hcom
+    ```
+  </Step>
+
+  <Step title="Remove data (optional)">
+    ```bash
+    rm -rf ~/.hcom
+    ```
+
+    <Warning>
+      This deletes all hcom data including the database, config, and logs. Archive your data first if you need it.
+    </Warning>
+  </Step>
+
+  <Step title="Remove PATH entry (optional)">
+    Remove the PATH export line from your shell config file (`~/.bashrc`, `~/.zshrc`, etc.).
+  </Step>
+</Steps>
+
+## Next steps
+
+<Card title="Quickstart" icon="rocket" href="/quickstart">
+  Launch your first agents and send messages
+</Card>

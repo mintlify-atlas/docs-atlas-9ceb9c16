@@ -1,0 +1,371 @@
+---
+title: 'Multi-Agent Debate'
+description: 'Structured debates with multiple AI agents for decision-making'
+---
+
+## Overview
+
+The debate workflow creates structured arguments between multiple AI agents to explore different perspectives on a topic. A judge moderates and evaluates arguments.
+
+## Quick Start
+
+```bash
+# Spawn fresh debaters with pre-assigned positions
+hcom run debate "AI will replace programmers" --spawn
+
+# Use existing agents (they pick their own positions)
+hcom run debate "tabs vs spaces" -w agent1,agent2,agent3
+
+# Custom rounds and context
+hcom run debate "microservices vs monolith" --spawn --rounds 4 \
+  --context "E-commerce platform with 50 engineers"
+```
+
+## Modes
+
+<Tabs>
+  <Tab title="Spawn Mode">
+    Launches fresh PRO and CON debaters with debate-specific system prompts.
+    
+    ```bash
+    hcom run debate "topic" --spawn
+    ```
+    
+    **Agents launched:**
+    - PRO debater (argues in favor)
+    - CON debater (argues against)  
+    - Judge (moderates and evaluates)
+    
+    **Best for:**
+    - Clean slate debates
+    - Controlled positions (PRO/CON)
+    - Academic/formal arguments
+  </Tab>
+  
+  <Tab title="Workers Mode">
+    Uses existing agents who dynamically choose their positions.
+    
+    ```bash
+    hcom run debate "topic" -w luna,nova,kira
+    ```
+    
+    **Best for:**
+    - Using agents with domain knowledge
+    - More than 2 debaters
+    - Organic position selection
+  </Tab>
+</Tabs>
+
+## Debate Structure
+
+<Steps>
+  <Step title="Setup">
+    Judge announces topic and rules. Debaters confirm ready.
+  </Step>
+  <Step title="Opening Statements">
+    PRO presents argument first, then CON responds.
+  </Step>
+  <Step title="Rebuttals">
+    Multiple rounds of back-and-forth arguments (default: 2 rounds).
+  </Step>
+  <Step title="Evaluation">
+    Judge scores both sides and declares winner with reasoning.
+  </Step>
+</Steps>
+
+## Options
+
+```bash
+hcom run debate [OPTIONS] TOPIC
+```
+
+| Option | Description | Default |
+|--------|-------------|----------|
+| `-s, --spawn` | Spawn fresh PRO/CON instances | - |
+| `-w, --workers NAMES` | Use existing instances (comma-separated) | - |
+| `--tool TOOL` | AI tool for spawned agents | claude |
+| `-r, --rounds N` | Number of rebuttal rounds | 2 |
+| `-t, --timeout N` | Response timeout in seconds | 120 |
+| `-c, --context TEXT` | Additional context for debaters | - |
+| `-i, --interactive` | Launch in terminal windows | false |
+| `--name NAME` | Your identity | - |
+
+## Examples
+
+### Simple Debate
+
+```bash
+hcom run debate "Remote work is better than office work" --spawn
+```
+
+**Flow:**
+
+1. PRO debater launches with system prompt favoring remote work
+2. CON debater launches opposing remote work
+3. Judge coordinates debate rounds
+4. All messages go to shared thread for visibility
+
+### Extended Debate
+
+```bash
+hcom run debate "Should we migrate to microservices?" --spawn --rounds 5 \
+  --context "Current: Django monolith, 20 engineers, 5 year old codebase"
+```
+
+**Context helps debaters:**
+- Ground arguments in reality
+- Reference specific constraints
+- Make practical recommendations
+
+### Multi-Agent Debate
+
+```bash
+hcom run debate "Best programming language for startups" \
+  -w alice,bob,charlie,diana
+```
+
+**With 4 agents:**
+- Agents pick different languages/positions
+- More diverse perspectives
+- Judge has harder evaluation task
+
+### Interactive Debate
+
+```bash
+hcom run debate "Vim vs Emacs" --spawn -i
+```
+
+**With `-i` flag:**
+- Debaters launch in terminal windows (not headless)
+- You can watch live conversation
+- Useful for debugging or learning
+
+## Watching Debates
+
+### Follow in real-time
+
+```bash
+# Get thread name from script output
+hcom events --wait 600 --sql "msg_thread='debate-1234567890'"
+```
+
+### Use TUI
+
+```bash
+hcom
+# Navigate to Messages tab
+# Filter by thread: debate-1234567890
+```
+
+### Query after completion
+
+```bash
+# Get thread from script output, then:
+hcom events --thread debate-1234567890 --type message
+```
+
+## Custom Debate Script
+
+For more control, create your own debate script:
+
+```bash
+# ~/.hcom/scripts/my-debate.sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+topic="$1"
+thread="debate-$(date +%s)"
+
+# Launch 3 debaters with different expertise
+hcom 1 claude --tag tech-lead --go --headless \
+  --hcom-system-prompt "You are a tech lead. Argue from engineering perspective."
+
+hcom 1 claude --tag product --go --headless \
+  --hcom-system-prompt "You are a product manager. Argue from user/business perspective."
+
+hcom 1 claude --tag designer --go --headless \
+  --hcom-system-prompt "You are a designer. Argue from UX/design perspective."
+
+# Custom judge
+hcom 1 claude --tag judge --go --hcom-prompt "
+Topic: ${topic}
+Thread: ${thread}
+
+1. Announce topic to debaters:
+   hcom send '@tech-lead @product @designer Topic: ${topic}. \
+     State your position and opening argument.' --thread ${thread}
+
+2. Collect 3 opening arguments (wait 180s):
+   hcom events --wait 180 --thread ${thread} --type message
+
+3. Two rounds of rebuttals:
+   - Prompt each to respond to others
+   - Collect responses
+
+4. Final judgment:
+   - Score each perspective: technical merit, user impact, feasibility
+   - Synthesize best path forward
+   - Send verdict to @team
+"
+
+echo "Debate started: ${thread}"
+```
+
+## Advanced: Contextual Debates
+
+Provide shared files/context for grounded debates:
+
+```bash
+# Create context bundle
+hcom bundle create "Database migration context" \
+  --description "Current schema, performance metrics, migration plan" \
+  --files schema.sql,perf-report.csv,migration-plan.md
+
+# Send to debaters before debate
+hcom send '@pro- @con- Context for debate attached. Review before arguing.' \
+  --title "Database migration context" \
+  --description "Schema, metrics, and plan" \
+  --files schema.sql,perf-report.csv,migration-plan.md
+
+# Then start debate
+hcom run debate "Should we migrate to PostgreSQL?" --spawn
+```
+
+## Judging Criteria
+
+The judge evaluates on:
+
+1. **Logical coherence**: Do arguments follow logically?
+2. **Evidence quality**: Are claims backed by data/examples?
+3. **Persuasiveness**: How compelling is the rhetoric?
+4. **Responsiveness**: Do they address opponent's points?
+5. **Structure**: Are arguments organized clearly?
+
+## Tips
+
+<Tip>
+  Use `--context` to ground debates in real scenarios instead of abstract theory.
+</Tip>
+
+<Tip>
+  Increase `--rounds` for complex topics that need deeper exploration (4-6 rounds).
+</Tip>
+
+<Tip>
+  For technical debates, use workers mode with agents that have loaded relevant code.
+</Tip>
+
+<Warning>
+  Don't set timeout too short. Complex arguments need time (120-180s per response).
+</Warning>
+
+## Debate Formats
+
+### For/Against Decision
+
+```bash
+hcom run debate "Should we rewrite in Rust?" --spawn \
+  --context "Current: Python, 100k LOC, performance issues"
+```
+
+### Best Option (3+ agents)
+
+```bash
+hcom run debate "Choose frontend framework" \
+  -w react-expert,vue-expert,svelte-expert
+```
+
+### Pros/Cons Exploration
+
+```bash
+hcom run debate "Evaluate serverless architecture" --spawn --rounds 4 \
+  --context "Current: Docker on EC2, considering Lambda migration"
+```
+
+## Troubleshooting
+
+### Debaters not responding
+
+Check if agents are idle:
+
+```bash
+hcom list | grep -E 'pro-|con-|judge-'
+hcom events --agent pro- --last 5
+```
+
+### Judge skipped rounds
+
+Query thread to see what happened:
+
+```bash
+hcom events --thread debate-1234567890 --type message --last 20
+```
+
+Manually prompt judge:
+
+```bash
+hcom send '@judge- Continue with round 2' --thread debate-1234567890
+```
+
+### Debate timeout
+
+Increase timeout for complex topics:
+
+```bash
+hcom run debate "topic" --spawn --timeout 240  # 4 minutes per response
+```
+
+### No clear winner
+
+Judge should declare TIE with reasoning:
+
+```
+VERDICT: TIE
+
+Both sides presented strong arguments:
+- PRO excelled at [aspects]
+- CON excelled at [aspects]
+
+The decision depends on [factors]
+Recommendation: [synthesis]
+```
+
+## Example Output
+
+Typical debate flow:
+
+```
+Thread: debate-1709564222
+Topic: Remote work is better than office work
+Tool: claude
+Mode: Spawning fresh PRO/CON debaters
+Rounds: 2
+
+PRO debater launched (claude)
+CON debater launched (claude)
+Judge launched (claude)
+
+Watch debate:
+  hcom events --wait 600 --sql "msg_thread='debate-1709564222'"
+
+Or in TUI:
+  hcom
+```
+
+Query results:
+
+```bash
+hcom events --thread debate-1709564222 --type message
+```
+
+Sample messages:
+
+```
+#42 14:30:22 message  judge-luna   "PRO: Present your opening argument..."
+#43 14:31:05 message  pro-nova     "Remote work offers flexibility..."
+#44 14:31:47 message  judge-luna   "CON: Present your argument..."
+#45 14:32:30 message  con-kira     "Office work enables collaboration..."
+#46 14:33:15 message  judge-luna   "Round 1 rebuttal..."
+...
+#52 14:38:42 message  judge-luna   "VERDICT: PRO wins 7/10 vs 6/10..."
+```

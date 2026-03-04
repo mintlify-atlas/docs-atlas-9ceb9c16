@@ -1,0 +1,404 @@
+---
+title: OpenCode Integration
+description: Integrate OpenCode with hcom for automatic message delivery and agent coordination
+---
+
+# OpenCode Integration
+
+OpenCode integration uses a TypeScript plugin that shells out to hcom for lifecycle management and message delivery.
+
+## Message Delivery
+
+**Automatic:** Messages are delivered via plugin polling when agent goes idle.
+
+**How it works:**
+1. Plugin registers TCP notify endpoint
+2. When messages arrive, hcom sends TCP wake to plugin
+3. Plugin calls `hcom opencode-read --format`
+4. Messages injected into OpenCode context
+
+## Plugin Installation
+
+OpenCode uses a TypeScript plugin instead of config file hooks.
+
+### Automatic Install
+
+Run OpenCode via hcom launcher:
+
+```bash
+hcom opencode
+```
+
+Plugin is installed automatically on first launch to `~/.config/opencode/plugins/hcom.ts`.
+
+### Manual Install
+
+If you prefer to run OpenCode directly:
+
+```bash
+hcom hooks add opencode
+```
+
+This installs the plugin. OpenCode auto-loads plugins from the plugins directory.
+
+### Verify Installation
+
+```bash
+hcom status
+# Look for: [✓] opencode
+
+hcom hooks status
+# Shows plugin installation status
+```
+
+**Check plugin file:**
+```bash
+ls ~/.config/opencode/plugins/hcom.ts
+```
+
+## Launch Modes
+
+### PTY Mode (Recommended)
+
+Launch with hcom for full integration:
+
+```bash
+# Single instance in current terminal
+hcom opencode
+
+# Multiple instances in new windows
+hcom 3 opencode
+
+# With initial prompt
+hcom opencode --hcom-prompt "Start by checking hcom list"
+
+# With tag for grouping
+hcom opencode --tag backend
+```
+
+**PTY mode features:**
+- Automatic message delivery via plugin
+- Terminal screen capture (`hcom term`)
+- Automatic cleanup on kill (`hcom kill`)
+- Fork and resume support
+
+### Vanilla Mode
+
+OpenCode does not support vanilla mode without the plugin. The plugin is required for all hcom integration.
+
+## Hook Types
+
+OpenCode uses 4 hook commands (not file-based hooks):
+
+| Hook | When | Purpose |
+|------|------|--------|
+| opencode-start | Session created | Bind session, return bootstrap |
+| opencode-status | Status/idle events | Update instance status |
+| opencode-read | Plugin polls | Fetch pending messages |
+| opencode-stop | Session deleted | Finalize session |
+
+**Hook invocation:**
+
+Plugin shells out to hcom:
+
+```typescript
+// Example
+const result = await executeCommand('hcom', [
+  'opencode-start',
+  '--session-id', sessionId,
+  '--notify-port', port.toString()
+]);
+```
+
+## Plugin Architecture
+
+### Plugin File
+
+**Location:** `~/.config/opencode/plugins/hcom.ts`
+
+**Embedded source:** Compiled into hcom binary, written on install.
+
+**Plugin structure:**
+
+```typescript
+export default class HcomPlugin implements Plugin {
+  name = 'hcom';
+  
+  // Lifecycle hooks
+  async onSessionCreated(session: Session) {}
+  async onSessionDeleted(session: Session) {}
+  
+  // Status tracking
+  async onStatusChange(session: Session, status: string) {}
+  async onIdle(session: Session) {}
+  
+  // Message delivery
+  async deliverPendingToIdle(session: Session) {}
+}
+```
+
+### TCP Notify Endpoint
+
+Plugin registers a TCP server for wake notifications:
+
+1. Plugin starts TCP server on random port
+2. Passes port to `opencode-start --notify-port`
+3. hcom stores endpoint in database
+4. When messages arrive, hcom sends TCP wake
+5. Plugin's `deliverPendingToIdle()` fires
+
+**Why TCP notify?**
+- Plugin can't hook into hcom's event loop
+- Polling would be inefficient
+- TCP wake provides instant notification
+
+### Message Polling
+
+Plugin uses `opencode-read` command:
+
+```bash
+# Check for messages
+hcom opencode-read --name <instance> --check
+# Output: "true" or "false"
+
+# Fetch messages (JSON array)
+hcom opencode-read --name <instance>
+# Output: [{"from":"luna","text":"hello"}]
+
+# Fetch formatted messages
+hcom opencode-read --name <instance> --format
+# Output: formatted text for injection
+
+# Acknowledge messages
+hcom opencode-read --name <instance> --ack --up-to 42
+# Advances cursor to event_id 42
+```
+
+## Configuration
+
+### Default Arguments
+
+```bash
+hcom config opencode_args "--model o3"
+```
+
+Merged with launch-time args (launch args win on conflict).
+
+### System Prompt
+
+OpenCode does not support system prompts via environment. Use OpenCode's native system prompt configuration.
+
+## Session Binding
+
+### PTY Mode
+
+Binding happens at `opencode-start`:
+
+1. Plugin fires `onSessionCreated` event
+2. Calls `hcom opencode-start --session-id <id> --notify-port <port>`
+3. hcom binds session to process via `HCOM_PROCESS_ID`
+4. Returns JSON: `{"name": "luna", "bootstrap": "..."}`
+5. Plugin injects bootstrap into session
+
+**Bootstrap injection:**
+
+Plugin adds bootstrap as system message at session start.
+
+### Re-binding (Compaction/Resume)
+
+If session already bound (after compaction):
+
+1. `opencode-start` detects existing binding
+2. Re-injects bootstrap
+3. Preserves identity across restarts
+
+## Launch Examples
+
+### Single Agent
+
+```bash
+# Current terminal
+hcom opencode
+
+# New window
+hcom 1 opencode
+
+# With initial prompt
+hcom opencode --hcom-prompt "Check hcom list"
+```
+
+### Multiple Agents
+
+```bash
+# 3 agents in new windows
+hcom 3 opencode
+
+# Tagged group
+hcom 3 opencode --tag api
+```
+
+### Fork and Resume
+
+```bash
+# Fork active or stopped agent
+hcom f luna
+
+# Resume stopped agent
+hcom r luna
+```
+
+## OpenCode Database Path
+
+OpenCode stores sessions in SQLite database:
+
+**Location:** `$XDG_DATA_HOME/opencode/opencode.db`
+
+**Default:** `~/.local/share/opencode/opencode.db`
+
+hcom stores this as `transcript_path` for consistency with other tools.
+
+## Message Delivery Flow
+
+1. **Message arrives:** Another agent sends message
+2. **Event logged:** Message stored in hcom database
+3. **Notify endpoints:** hcom sends TCP wake to plugin
+4. **Plugin wakes:** `deliverPendingToIdle()` fires
+5. **Check messages:** Plugin calls `opencode-read --check`
+6. **Fetch messages:** Plugin calls `opencode-read --format`
+7. **Inject:** Plugin adds messages to session context
+8. **Acknowledge:** Plugin calls `opencode-read --ack`
+
+## Advanced
+
+### Plugin Update
+
+Plugin is embedded in hcom binary. When hcom updates:
+
+1. `ensure_plugin_installed()` checks if current
+2. Compares installed vs embedded source
+3. Re-writes plugin if outdated
+4. No OpenCode restart needed (auto-reload)
+
+**Check plugin version:**
+```bash
+hcom hooks status
+# Shows if plugin is current
+```
+
+**Force reinstall:**
+```bash
+hcom hooks remove opencode
+hcom hooks add opencode
+```
+
+### Plugin Scan Directories
+
+Plugin can be in multiple locations:
+
+- `~/.config/opencode/plugin/` (legacy)
+- `~/.config/opencode/plugins/` (current)
+- `$OPENCODE_CONFIG_DIR/plugin/`
+- `$OPENCODE_CONFIG_DIR/plugins/`
+
+hcom installs to canonical location (`~/.config/opencode/plugins/`) but detects all.
+
+### Last Event ID Initialization
+
+On first launch, `opencode-start` initializes `last_event_id`:
+
+1. Check if `last_event_id == 0` (new instance)
+2. Use `HCOM_LAUNCH_EVENT_ID` env var if set
+3. Otherwise use current max event ID
+4. Prevents historical messages from flooding new instance
+
+**Why this matters:**
+- Prevents delivering all historical messages
+- Preserves message history for resume
+- Respects launch event boundary
+
+### Message Read Modes
+
+`opencode-read` supports 4 modes:
+
+**Default:** Raw JSON array (does NOT advance cursor)
+```bash
+hcom opencode-read --name luna
+# [{"from":"nova","text":"hi"}]
+```
+
+**Format:** Human-readable text for injection
+```bash
+hcom opencode-read --name luna --format
+# [nova]: hi
+```
+
+**Check:** Boolean string
+```bash
+hcom opencode-read --name luna --check
+# true
+```
+
+**Ack:** Advance cursor
+```bash
+hcom opencode-read --name luna --ack --up-to 42
+# {"acked_to":42}
+```
+
+## Troubleshooting
+
+### Plugin not loading
+
+1. Check plugin exists: `ls ~/.config/opencode/plugins/hcom.ts`
+2. Check OpenCode logs for plugin errors
+3. Reinstall plugin: `hcom hooks add opencode`
+
+### Messages not arriving
+
+1. Check agent status: `hcom list` shows `listening`
+2. Verify plugin loaded: Check OpenCode plugin manager
+3. Check TCP notify: `hcom list <name> --json | grep notify`
+4. Try manual send: `hcom send @opencode-instance -- test`
+
+### TCP notify not working
+
+1. Check firewall: TCP wake uses localhost
+2. Check port in use: Plugin uses random port
+3. Restart OpenCode session
+
+### Plugin outdated
+
+```bash
+hcom hooks status
+# Shows if plugin needs update
+
+hcom hooks remove opencode
+hcom hooks add opencode
+# Reinstalls latest plugin
+```
+
+## Reference
+
+**Plugin location:** `~/.config/opencode/plugins/hcom.ts`
+
+**Plugin source:** Embedded in hcom binary
+
+**Plugin functions:**
+```rust
+pub fn install_opencode_plugin() -> std::io::Result<bool>
+pub fn remove_opencode_plugin() -> std::io::Result<()>
+pub fn verify_opencode_plugin_installed() -> bool
+pub fn ensure_plugin_installed() -> bool
+```
+
+**Hook dispatcher:**
+```rust
+pub fn dispatch_opencode_hook(hook_name: &str, argv: &[String]) -> (i32, String)
+```
+
+**Hook handlers:**
+```rust
+fn handle_start(ctx: &HcomContext, db: &HcomDb, argv: &[String]) -> (i32, String)
+fn handle_status(db: &HcomDb, argv: &[String]) -> (i32, String)
+fn handle_read(db: &HcomDb, argv: &[String]) -> (i32, String)
+fn handle_stop(db: &HcomDb, argv: &[String]) -> (i32, String)
+```

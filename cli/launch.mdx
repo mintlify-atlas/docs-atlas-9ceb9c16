@@ -1,0 +1,269 @@
+---
+title: 'hcom launch'
+description: 'Launch AI agents with hcom integration'
+---
+
+## Overview
+
+Launch one or more AI agents (Claude, Gemini, Codex, OpenCode) with automatic hcom integration, message delivery, and event tracking.
+
+## Syntax
+
+```bash
+hcom [N] <tool> [FLAGS] [TOOL_ARGS]
+```
+
+<ParamField path="N" type="number" optional>
+  Number of agents to launch (default: 1)
+  - Maximum for Claude: 100
+  - Maximum for others: 10
+</ParamField>
+
+<ParamField path="tool" type="string" required>
+  AI tool to launch: `claude`, `gemini`, `codex`, or `opencode`
+</ParamField>
+
+## hcom Flags
+
+These flags configure hcom behavior and are processed before being passed to the tool.
+
+<ParamField path="--tag" type="string">
+  Group tag - launched agents get names like `tag-*`
+  
+  ```bash
+  hcom 3 claude --tag dev
+  # Creates: dev-luna, dev-nova, dev-kira
+  ```
+</ParamField>
+
+<ParamField path="--terminal" type="string">
+  Terminal preset for new windows
+  
+  Options: `kitty`, `wezterm`, `tmux`, `iTerm`, `Terminal.app`, `ghostty`, `alacritty`, or custom
+  
+  ```bash
+  hcom 2 claude --terminal kitty-tab
+  ```
+</ParamField>
+
+<ParamField path="--headless" type="boolean">
+  Launch in background without terminal window (Claude only)
+  
+  Equivalent to `claude -p` mode
+</ParamField>
+
+<ParamField path="--hcom-prompt" type="string">
+  Initial prompt to send after launch
+  
+  ```bash
+  hcom claude --hcom-prompt "Say hi in hcom"
+  ```
+</ParamField>
+
+<ParamField path="--hcom-system-prompt" type="string">
+  Custom system prompt appended to agent bootstrap
+  
+  Alias: `--system`
+</ParamField>
+
+<ParamField path="--batch-id" type="string">
+  Custom batch ID for grouping launches (auto-generated if not provided)
+</ParamField>
+
+<ParamField path="--run-here" type="boolean">
+  Run in current terminal instead of spawning new window (when N=1)
+</ParamField>
+
+## Global Flags
+
+<ParamField path="--go" type="boolean">
+  Skip confirmation preview when launching from inside an AI tool
+  
+  Required when launching with args or large batches from Claude/Gemini/Codex/OpenCode
+</ParamField>
+
+<ParamField path="--name" type="string">
+  Launcher identity (for tracking who initiated the launch)
+</ParamField>
+
+## Tool-Specific Arguments
+
+Any arguments not recognized as hcom flags are passed directly to the tool CLI.
+
+```bash
+# Claude with model override
+hcom claude --model opus
+
+# Gemini with specific model
+hcom gemini -m gemini-2.5-flash
+
+# Codex with sandbox mode
+hcom codex --sandbox off
+
+# OpenCode (all args passed through)
+hcom opencode --verbose
+```
+
+## Environment Variables
+
+<ParamField path="HCOM_TAG" type="string">
+  Default group tag (overridden by `--tag` flag)
+</ParamField>
+
+<ParamField path="HCOM_TERMINAL" type="string">
+  Default terminal preset (overridden by `--terminal` flag)
+  
+  Default: `default` (auto-detect current terminal)
+</ParamField>
+
+<ParamField path="HCOM_HINTS" type="string">
+  Text appended to all messages received by launched agents
+</ParamField>
+
+<ParamField path="HCOM_NOTES" type="string">
+  One-time bootstrap notes shown at startup
+</ParamField>
+
+<ParamField path="HCOM_SUBAGENT_TIMEOUT" type="number">
+  Seconds subagents stay alive after task completion
+  
+  Default: 30
+</ParamField>
+
+<ParamField path="HCOM_CLAUDE_ARGS" type="string">
+  Default args merged with CLI args for Claude launches
+  
+  Example: `--model opus --verbose`
+</ParamField>
+
+<ParamField path="HCOM_GEMINI_ARGS" type="string">
+  Default args for Gemini launches
+</ParamField>
+
+<ParamField path="HCOM_CODEX_ARGS" type="string">
+  Default args for Codex launches
+</ParamField>
+
+<ParamField path="HCOM_OPENCODE_ARGS" type="string">
+  Default args for OpenCode launches
+</ParamField>
+
+## Examples
+
+### Basic Launch
+
+```bash
+# Single Claude agent in current terminal
+hcom claude
+
+# 3 Gemini agents in new windows
+hcom 3 gemini
+
+# Single OpenCode agent
+hcom opencode
+```
+
+### Launch with Tag
+
+```bash
+# Create a team of agents
+hcom 3 claude --tag team-alpha
+# Creates: team-alpha-luna, team-alpha-nova, team-alpha-kira
+
+# Message the team
+hcom send @team-alpha -- All agents coordinate on this task
+```
+
+### Headless Launch
+
+```bash
+# Claude headless with initial prompt
+hcom claude -p "Fix all TypeScript errors"
+
+# Or with --headless flag
+hcom claude --headless --hcom-prompt "Run tests"
+```
+
+### Launch with Specific Terminal
+
+```bash
+# Open in kitty tabs
+hcom 2 claude --terminal kitty-tab
+
+# Open in tmux sessions
+hcom 3 gemini --terminal tmux
+```
+
+### Launch with Custom Args
+
+```bash
+# Claude with specific model and agent file
+hcom claude --model opus --agent reviewer
+
+# Gemini with model override
+hcom gemini -m gemini-2.5-pro
+
+# Codex with sandbox disabled
+hcom codex --sandbox off
+```
+
+### Environment-Based Launch
+
+```bash
+# Set default tag for session
+export HCOM_TAG=experiment-1
+hcom 5 claude
+# All get tag: experiment-1-*
+```
+
+## Output
+
+Successful launch prints:
+
+```
+Started the launch process for 3 Claude agents
+Names: luna, nova, kira
+Batch id: batch_abc123
+To block until ready or fail (30s timeout), run: hcom events launch
+```
+
+## Exit Codes
+
+<ResponseField name="0" type="success">
+  All agents launched successfully
+</ResponseField>
+
+<ResponseField name="1" type="error">
+  One or more launches failed
+  
+  Check output for error details
+</ResponseField>
+
+## Notes
+
+<Note>
+  **Confirmation Gate**: When launching from inside an AI tool with arguments or large batches (N > 5), hcom shows a preview and requires `--go` flag to proceed. This prevents accidental resource-heavy launches.
+</Note>
+
+<Note>
+  **Hooks Installation**: Hooks are automatically installed in `~/` (or `$HCOM_DIR`) on first launch. Remove with `hcom hooks remove`.
+</Note>
+
+<Note>
+  **Terminal Detection**: When `HCOM_TERMINAL=default`, hcom auto-detects kitty, wezterm, or tmux and uses appropriate spawn commands. For other terminals, set explicitly.
+</Note>
+
+<Note>
+  **Argument Merging**: Environment args (`HCOM_*_ARGS`) are merged with CLI args. CLI args take precedence for conflicting flags.
+</Note>
+
+<Note>
+  **Max Count**: Claude allows up to 100 simultaneous agents due to its stability in PTY mode. Other tools are limited to 10 to prevent resource exhaustion.
+</Note>
+
+## Related Commands
+
+- [`hcom list`](/cli/list) - View launched agents and their status
+- [`hcom stop`](/cli/stop) - Stop running agents
+- [`hcom kill`](/cli/kill) - Terminate agent processes
+- [`hcom r`](/cli/resume) - Resume stopped agents

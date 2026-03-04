@@ -1,0 +1,323 @@
+---
+title: 'hcom events'
+description: 'Query and subscribe to event streams'
+---
+
+## Overview
+
+The `hcom events` command provides query and subscription capabilities for the event stream, which tracks messages, status changes, file edits, and lifecycle events across all agents.
+
+## Basic Usage
+
+```bash
+# Query last 20 events
+hcom events
+
+# Query with limit
+hcom events --last 50
+
+# Include archived sessions
+hcom events --all
+
+# Full output (no streamlining)
+hcom events --full
+
+# Wait for matching event (default 60s)
+hcom events --wait
+hcom events --wait 30  # Custom timeout
+```
+
+## Event Filters
+
+Filters combine with AND logic (same flag repeated = OR).
+
+### Agent & Type
+
+```bash
+# Filter by agent name
+hcom events --agent luna
+hcom events --agent luna --agent nova  # luna OR nova
+
+# Filter by event type
+hcom events --type message              # message events
+hcom events --type status               # status changes
+hcom events --type life                 # lifecycle events
+```
+
+### Status & Context
+
+```bash
+# Filter by status
+hcom events --status listening          # idle agents
+hcom events --status active             # processing
+hcom events --status blocked            # needs approval
+
+# Filter by context (supports * wildcard)
+hcom events --context 'tool:Bash'       # bash executions
+hcom events --context 'tool:*'          # all tool use
+hcom events --context 'deliver:*'       # message delivery
+```
+
+### Commands & Files
+
+```bash
+# Filter by shell command (contains, ^prefix, $suffix, =exact, *glob)
+hcom events --cmd git                   # contains 'git'
+hcom events --cmd '^npm install'        # starts with 'npm install'
+hcom events --cmd '$--help'             # ends with '--help'
+hcom events --cmd '=ls -la'             # exact match
+hcom events --cmd '*test*.py'           # glob pattern
+
+# Filter by file writes
+hcom events --file '*.py'               # Python files (glob)
+hcom events --file auth.py              # contains 'auth.py'
+
+# Collision detection (two agents edit same file within 30s)
+hcom events --collision
+```
+
+### Messages
+
+```bash
+# Filter by sender
+hcom events --from nova
+
+# Filter by @mention
+hcom events --mention luna
+
+# Filter by intent
+hcom events --intent request            # expects response
+hcom events --intent inform             # FYI only
+hcom events --intent ack                # reply
+
+# Filter by thread
+hcom events --thread debug-session
+```
+
+### Time Range
+
+```bash
+# Filter by timestamp (ISO-8601)
+hcom events --after 2026-03-04T10:00:00
+hcom events --before 2026-03-04T18:00:00
+hcom events --after 2026-03-04T10:00:00 --before 2026-03-04T18:00:00
+```
+
+### Shortcuts
+
+```bash
+# Idle detection
+hcom events --idle peso                 # --agent peso --status listening
+
+# Blocked detection
+hcom events --blocked luna              # --agent luna --status blocked
+```
+
+## SQL Queries
+
+```bash
+# Raw SQL WHERE clause (ANDed with flags)
+hcom events --sql "msg_text LIKE '%error%'"
+hcom events --sql "life_action = 'stopped'" --agent luna
+```
+
+### SQL Schema (events_v view)
+
+**Base fields:**
+- `id` (integer)
+- `timestamp` (ISO-8601 string)
+- `type` (message | status | life)
+- `instance` (agent name)
+
+**Message fields (`msg_*`):**
+- `msg_from` (sender name)
+- `msg_text` (message content)
+- `msg_scope` (broadcast | mentions)
+- `msg_sender_kind` (instance | external | system)
+- `msg_delivered_to` (JSON array)
+- `msg_mentions` (JSON array)
+- `msg_intent` (request | inform | ack)
+- `msg_thread` (thread name)
+- `msg_reply_to` (event ID)
+
+**Status fields (`status_*`):**
+- `status_val` (listening | active | blocked | error)
+- `status_context` (tool:X | deliver:X | approval | prompt | exit:X)
+- `status_detail` (file paths, commands, error messages)
+
+**Lifecycle fields (`life_*`):**
+- `life_action` (created | ready | stopped | batch_launched)
+- `life_by` (initiator name)
+- `life_batch_id` (batch identifier)
+- `life_reason` (stop reason)
+
+**SQL Notes:**
+- Use `LIKE '%name%'` for JSON arrays (delivered_to, mentions)
+- Use `<>` instead of `!=` for negation
+- Combine with filter flags for readability
+
+## Event Subscriptions
+
+Subscriptions deliver matching events as messages from `[hcom-events]`.
+
+### Subscribe with Filters
+
+```bash
+# Subscribe to idle events
+hcom events sub --idle peso
+
+# Subscribe to file edits
+hcom events sub --file '*.py'
+
+# Subscribe to collision events
+hcom events sub --collision
+
+# One-shot subscription (auto-remove after first match)
+hcom events sub --file '*.py' --once
+
+# Subscribe on behalf of another agent
+hcom events sub --idle peso --for nova
+```
+
+### Subscribe with SQL
+
+```bash
+# Raw SQL subscription
+hcom events sub "type='life' AND life_action='stopped'"
+
+# Combine SQL with filters
+hcom events sub --agent peso "msg_intent = 'request'"
+```
+
+### Manage Subscriptions
+
+```bash
+# List active subscriptions
+hcom events sub list
+
+# Remove subscription
+hcom events unsub sub-abc123
+hcom events unsub abc123        # 'sub-' prefix optional
+```
+
+## Wait Mode
+
+Block until a matching event occurs or timeout.
+
+```bash
+# Wait for message (default 60s timeout)
+hcom events --type message --wait
+
+# Wait for specific agent to go idle
+hcom events --idle peso --wait 120
+
+# Wait for file edit
+hcom events --file '*.rs' --wait
+
+# Quick unread check (1 second timeout)
+hcom listen 1
+```
+
+**Exit codes:**
+- `0` - Event matched
+- `1` - Timeout or error
+
+## Launch Status
+
+Wait for agent launch to complete.
+
+```bash
+# Wait for any launch by current agent
+hcom events launch
+
+# Wait for specific batch
+hcom events launch batch-abc123
+
+# Custom timeout
+hcom events launch --timeout 60
+```
+
+## Examples
+
+### Development Monitoring
+
+```bash
+# Watch for test file edits
+hcom events sub --file 'test_*.py'
+
+# Monitor git commands
+hcom events sub --cmd git
+
+# Track errors
+hcom events sub --sql "status_detail LIKE '%error%'"
+```
+
+### Agent Coordination
+
+```bash
+# Wait for peer to finish
+hcom events --idle partner --wait
+
+# Watch for collision
+hcom events sub --collision
+
+# Monitor requests
+hcom events sub --intent request --once
+```
+
+### Debug & Audit
+
+```bash
+# Recent bash commands
+hcom events --context 'tool:Bash' --last 50
+
+# All file edits in range
+hcom events --after 2026-03-04T10:00:00 --file '*'
+
+# Lifecycle events
+hcom events --type life --all
+```
+
+## Output Format
+
+### Streamlined (default)
+
+Compact format (~35% token reduction) with:
+- Truncated timestamp (19 chars)
+- Removed bloat fields (sender_kind, scope, delivered_to)
+- Truncated detail fields (unless --cmd/--file active)
+
+### Full (--full)
+
+Complete event data including all fields.
+
+### JSON
+
+```json
+{
+  "id": 123,
+  "ts": "2026-03-04T15:30:45",
+  "type": "message",
+  "instance": "luna",
+  "data": {
+    "from": "nova",
+    "text": "Task complete",
+    "intent": "inform"
+  }
+}
+```
+
+## Tips
+
+- Use `--last N` to limit output size
+- Combine filters to narrow results: `--agent peso --cmd git`
+- Use subscriptions instead of polling: `events sub --idle peso`
+- Use `--wait` for blocking operations
+- Archive searches include `--all` flag
+- Collision detection auto-filters for self-relevance
+
+## See Also
+
+- [hcom listen](/cli/listen) - Wait for messages
+- [hcom list](/cli/list) - Agent status
+- [hcom config](/cli/config) - Auto-subscribe presets

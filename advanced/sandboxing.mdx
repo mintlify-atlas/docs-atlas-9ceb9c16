@@ -1,0 +1,548 @@
+---
+title: Project-Local and Sandbox Mode
+description: Isolate hcom state per-project or run in sandboxed environments
+---
+
+## Overview
+
+By default, hcom uses `~/.hcom` for all state (database, logs, config). **Sandbox mode** isolates state to a project-local directory using the `HCOM_DIR` environment variable.
+
+Use cases:
+- Multiple projects with separate agent groups
+- Temporary sandboxes for testing
+- Environments without `$HOME` write access
+- Per-project relay groups
+
+## Setting HCOM_DIR
+
+### Per-Command
+
+```bash
+# Launch agent in project-local mode
+HCOM_DIR="$PWD/.hcom" hcom claude
+
+# All state goes to ./.hcom/
+```
+
+### Persistent (Recommended)
+
+Add to your shell config (`~/.bashrc`, `~/.zshrc`):
+
+```bash
+# Per-project hcom (auto-detects .hcom directory)
+if [[ -d "$PWD/.hcom" ]]; then
+  export HCOM_DIR="$PWD/.hcom"
+else
+  export HCOM_DIR="$HOME/.hcom"  # fallback to global
+fi
+```
+
+Or use a function:
+
+```bash
+hcom-local() {
+  export HCOM_DIR="$PWD/.hcom"
+  echo "HCOM_DIR set to: $HCOM_DIR"
+}
+
+hcom-global() {
+  export HCOM_DIR="$HOME/.hcom"
+  echo "HCOM_DIR set to: $HCOM_DIR"
+}
+```
+
+Usage:
+
+```bash
+cd ~/my-project
+hcom-local
+hcom claude  # Uses ./my-project/.hcom
+```
+
+## Directory Structure
+
+### Global Mode
+
+```
+~/.hcom/
+├── db.sqlite           # All agents, messages, events
+├── config.toml         # User configuration
+├── env                 # Environment variables
+├── logs/               # Daemon logs
+├── launch/             # Launch scripts (temp)
+├── pidtrack/           # Process tracking
+├── scripts/            # User workflow scripts
+└── .tmp/               # Temporary files
+```
+
+### Project-Local Mode
+
+```
+my-project/
+├── .hcom/              # Isolated hcom state
+│   ├── db.sqlite
+│   ├── config.toml     # Project-specific config
+│   ├── env
+│   ├── logs/
+│   └── .tmp/
+├── .claude/            # Claude hooks (project-local)
+├── .gemini/            # Gemini hooks (project-local)
+└── .codex/             # Codex hooks (project-local)
+```
+
+Hooks install **relative to the project directory** when `HCOM_DIR` is set to a local path.
+
+## Initial Setup
+
+### Create Project Sandbox
+
+```bash
+cd ~/my-project
+
+# Set HCOM_DIR
+export HCOM_DIR="$PWD/.hcom"
+
+# Initialize (creates .hcom/)
+hcom status
+
+# Install hooks locally
+hcom hooks add all
+# Hooks go to ./.claude, ./.gemini, ./.codex
+
+# Launch agents
+hcom 3 claude
+```
+
+### Verify Isolation
+
+```bash
+# Check which database is being used
+hcom status
+# Shows: Database: /home/user/my-project/.hcom/db.sqlite
+
+# List agents
+hcom list
+# Only shows agents in this sandbox
+```
+
+## Hook Installation
+
+When `HCOM_DIR` is project-local, hooks install relative to the project:
+
+### Global Mode
+
+```bash
+export HCOM_DIR="$HOME/.hcom"
+hcom hooks add claude
+# Installs to: ~/.claude/start_hook
+```
+
+### Project-Local Mode
+
+```bash
+export HCOM_DIR="$PWD/.hcom"
+hcom hooks add claude
+# Installs to: ./.claude/start_hook
+```
+
+### OpenCode (Special Case)
+
+OpenCode hooks always install to `~/.config/opencode/settings.json` (global only).
+
+For project-local OpenCode, set both:
+
+```bash
+export HCOM_DIR="$PWD/.hcom"
+# OpenCode respects HCOM_DIR at runtime, but hook location is global
+```
+
+## Configuration
+
+Each `HCOM_DIR` has its own `config.toml`:
+
+```bash
+# Global config
+hcom config terminal kitty
+# Writes to: ~/.hcom/config.toml
+
+# Project-local config
+export HCOM_DIR="$PWD/.hcom"
+hcom config terminal wezterm
+# Writes to: ./my-project/.hcom/config.toml
+```
+
+### Shared Settings
+
+Environment variables **override** config files:
+
+```bash
+# Set global default
+HCOM_TERMINAL=kitty
+
+# Override for a specific project
+cd ~/special-project
+export HCOM_DIR="$PWD/.hcom"
+export HCOM_TERMINAL=tmux
+hcom claude  # Uses tmux
+```
+
+## Usage Patterns
+
+### Pattern 1: Per-Project Agents
+
+Each project gets its own agent group:
+
+```bash
+# Project A
+cd ~/project-a
+export HCOM_DIR="$PWD/.hcom"
+hcom 2 claude --tag backend
+hcom 1 gemini --tag frontend
+
+# Project B (separate agents)
+cd ~/project-b
+export HCOM_DIR="$PWD/.hcom"
+hcom 2 codex --tag api
+```
+
+Agents in project A don't see agents in project B.
+
+### Pattern 2: Temporary Sandbox
+
+Quick test without polluting global state:
+
+```bash
+mkdir /tmp/test-sandbox
+cd /tmp/test-sandbox
+export HCOM_DIR="$PWD/.hcom"
+
+hcom claude
+# Test workflow
+hcom reset all  # Clean up
+
+rm -rf /tmp/test-sandbox
+```
+
+### Pattern 3: Team Collaboration
+
+Share project directory with `HCOM_DIR` in git:
+
+```bash
+# .gitignore
+.hcom/db.sqlite
+.hcom/logs/
+.hcom/.tmp/
+
+# Commit config for team
+git add .hcom/config.toml
+```
+
+Team members run:
+
+```bash
+cd ~/shared-project
+export HCOM_DIR="$PWD/.hcom"
+hcom hooks add all
+hcom claude
+```
+
+## Switching Contexts
+
+### Manual Switch
+
+```bash
+# Work on project A
+cd ~/project-a
+export HCOM_DIR="$PWD/.hcom"
+hcom list
+
+# Switch to project B
+cd ~/project-b
+export HCOM_DIR="$PWD/.hcom"
+hcom list  # Different agents
+
+# Switch to global
+export HCOM_DIR="$HOME/.hcom"
+hcom list  # Global agents
+```
+
+### Auto-Detect Function
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+cd() {
+  builtin cd "$@" || return
+  if [[ -d "$PWD/.hcom" ]]; then
+    export HCOM_DIR="$PWD/.hcom"
+    echo "📁 HCOM: project-local ($PWD/.hcom)"
+  else
+    export HCOM_DIR="$HOME/.hcom"
+  fi
+}
+```
+
+Now `cd` automatically switches `HCOM_DIR`:
+
+```bash
+cd ~/project-a
+# 📁 HCOM: project-local (/home/user/project-a/.hcom)
+
+hcom list  # Shows project-a agents
+
+cd ~/project-b
+# 📁 HCOM: project-local (/home/user/project-b/.hcom)
+
+hcom list  # Shows project-b agents
+```
+
+## Relay with Sandboxes
+
+Each `HCOM_DIR` can have a separate relay group:
+
+```bash
+# Project A relay
+cd ~/project-a
+export HCOM_DIR="$PWD/.hcom"
+hcom relay new
+# Token: relay_abc123_broker.emqx.io
+
+# Project B relay (different group)
+cd ~/project-b
+export HCOM_DIR="$PWD/.hcom"
+hcom relay new
+# Token: relay_def456_broker.emqx.io
+```
+
+Project A agents don't see Project B agents, even if on the same machine or relay broker.
+
+## Cleanup
+
+### Remove Project Sandbox
+
+```bash
+cd ~/my-project
+export HCOM_DIR="$PWD/.hcom"
+
+# Stop all agents
+hcom stop all --go
+
+# Remove hooks
+hcom hooks remove all
+
+# Delete sandbox
+rm -rf .hcom .claude .gemini .codex
+```
+
+### Archive Before Cleanup
+
+```bash
+# Archive conversation history
+hcom reset  # Archives to .hcom/archive/
+
+# Keep archive, remove active state
+rm .hcom/db.sqlite
+```
+
+## Restricted Environments
+
+### No $HOME Write Access
+
+If `~/.hcom` is read-only:
+
+```bash
+# Use a writable location
+export HCOM_DIR="/tmp/hcom-$USER"
+mkdir -p "$HCOM_DIR"
+
+hcom status
+hcom hooks add all
+```
+
+Hooks install relative to current directory:
+
+```bash
+ls -la .claude/
+# Shows: start_hook, stop_hook
+```
+
+### Docker/Container
+
+In containers, set `HCOM_DIR` to a mounted volume:
+
+```bash
+# docker-compose.yml
+services:
+  dev:
+    image: my-dev-image
+    volumes:
+      - ./project:/workspace
+      - ./hcom-state:/workspace/.hcom
+    environment:
+      - HCOM_DIR=/workspace/.hcom
+```
+
+Inside container:
+
+```bash
+cd /workspace
+hcom hooks add all
+hcom claude
+```
+
+State persists in `./hcom-state` on host.
+
+## Path Expansion
+
+`HCOM_DIR` supports:
+
+- **Absolute paths**: `/home/user/project/.hcom`
+- **Relative paths**: `.hcom` (resolved to `$PWD/.hcom`)
+- **Tilde expansion**: `~/.hcom` (expands to `$HOME/.hcom`)
+
+Relative paths are resolved relative to the **current working directory** when hcom starts.
+
+## Environment Variable Summary
+
+```bash
+# Core
+HCOM_DIR="$PWD/.hcom"              # State directory
+
+# Runtime (auto-set by hcom)
+HCOM_INSTANCE_NAME="luna"          # Agent name
+HCOM_PROCESS_ID="abc123"           # Process ID
+
+# Launch config (optional overrides)
+HCOM_TAG="backend"                 # Group tag
+HCOM_TERMINAL="kitty-split"        # Terminal preset
+HCOM_HINTS="Custom instructions"   # Message hints
+HCOM_NOTES="Bootstrap notes"       # One-time notes
+HCOM_AUTO_APPROVE="1"              # Auto-approve safe commands
+```
+
+## Troubleshooting
+
+### Agents Not Appearing
+
+**Check active HCOM_DIR:**
+
+```bash
+hcom status | grep "Database"
+# Should match your expected .hcom path
+```
+
+**Verify HCOM_DIR is set:**
+
+```bash
+echo $HCOM_DIR
+# Should output: /your/project/.hcom
+```
+
+### Hooks Not Working
+
+**Check hook installation location:**
+
+```bash
+hcom hooks status
+# Shows where hooks are installed
+```
+
+**Reinstall hooks with correct HCOM_DIR:**
+
+```bash
+export HCOM_DIR="$PWD/.hcom"
+hcom hooks remove all
+hcom hooks add all
+```
+
+### Permission Denied
+
+**Check directory permissions:**
+
+```bash
+ls -la .hcom
+# Should be owned by your user
+```
+
+**Create with correct permissions:**
+
+```bash
+mkdir -p .hcom
+chmod 700 .hcom
+```
+
+### State Leaking Between Projects
+
+**Verify separate databases:**
+
+```bash
+# Project A
+cd ~/project-a
+export HCOM_DIR="$PWD/.hcom"
+hcom list --json | jq -r '.[].name'
+
+# Project B
+cd ~/project-b
+export HCOM_DIR="$PWD/.hcom"
+hcom list --json | jq -r '.[].name'
+
+# Should show different agents
+```
+
+**Check for stale HCOM_DIR:**
+
+```bash
+env | grep HCOM_DIR
+# Should match current project
+```
+
+## Best Practices
+
+1. **Use project-local for multi-project work** - Avoid agent name collisions
+2. **Add .hcom to .gitignore** - But commit `config.toml` for team consistency
+3. **Auto-detect with shell function** - Less manual context switching
+4. **Document HCOM_DIR setup** - In project README for team members
+5. **Use separate relay groups** - If syncing project sandboxes across devices
+6. **Clean up temp sandboxes** - Use `/tmp` for experiments
+7. **Backup archives** - Before deleting `.hcom` directories
+8. **Test in sandbox first** - Before running in global mode
+
+## Migration
+
+### Global → Project-Local
+
+```bash
+# Export global state
+cd ~
+hcom archive  # Check existing data
+
+# Move to project
+cd ~/my-project
+mkdir .hcom
+cp -r ~/.hcom/config.toml .hcom/
+
+# Set project mode
+export HCOM_DIR="$PWD/.hcom"
+
+# Install hooks
+hcom hooks add all
+
+# Launch agents fresh (old transcripts stay in global)
+hcom 3 claude
+```
+
+### Project-Local → Global
+
+```bash
+# Stop project agents
+cd ~/my-project
+export HCOM_DIR="$PWD/.hcom"
+hcom stop all --go
+
+# Remove project hooks
+hcom hooks remove all
+
+# Switch to global
+export HCOM_DIR="$HOME/.hcom"
+hcom hooks add all
+hcom 3 claude
+```

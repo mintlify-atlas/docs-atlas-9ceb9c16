@@ -1,0 +1,282 @@
+---
+title: 'hcom archive'
+description: 'Query past hcom sessions and archived conversations'
+---
+
+## Overview
+
+`hcom archive` lists and queries archived sessions. Each time you run `hcom reset`, the current session is archived to `~/.hcom/archive/session-{timestamp}/` with a complete copy of the database.
+
+## Usage
+
+```bash
+hcom archive                    # List archived sessions
+hcom archive <N>                # Query events from archive (1 = most recent)
+hcom archive <N> agents         # Query agents from archive
+hcom archive <name>             # Query by name prefix
+```
+
+## Listing Archives
+
+```bash
+hcom archive
+```
+
+**Output:**
+
+```
+Archives:
+   1. session-2026-03-04_143022  127 events  4 agents
+   2. session-2026-03-03_091544   89 events  2 agents
+   3. session-2026-03-02_201133  234 events  6 agents
+```
+
+Archives are numbered newest-first. Use the number or name prefix to query.
+
+## Querying Events
+
+### By Index
+
+```bash
+hcom archive 1                  # Most recent archive
+hcom archive 2                  # Second most recent
+```
+
+### By Name
+
+```bash
+hcom archive session-2026-03-04_143022
+hcom archive 2026-03-04         # Prefix match
+```
+
+### With Filters
+
+```bash
+hcom archive 1 --sql "type='message'"
+hcom archive 1 --last 50
+hcom archive 1 --json
+```
+
+**Options:**
+
+- `--sql "expr"` - SQL WHERE clause for filtering
+- `--last N` - Limit results (default: 20)
+- `--json` - JSON output
+- `--here` - Filter to archives from current directory
+
+## Querying Agents
+
+```bash
+hcom archive 1 agents
+```
+
+**Output:**
+
+```
+name     status   directory                                transcript
+luna     stopped  ~/projects/myapp                         ~/.claude/transcripts/luna.jsonl
+nova     stopped  ~/projects/myapp                         ~/.claude/transcripts/nova.jsonl
+kira     stopped  ~/projects/backend                       ~/.gemini/transcripts/kira.jsonl
+```
+
+### With Filters
+
+```bash
+hcom archive 1 agents --sql "directory LIKE '%myapp%'"
+hcom archive 1 agents --json
+```
+
+## Filtering by Directory
+
+Use `--here` to show only archives with agents from the current directory:
+
+```bash
+cd ~/projects/myapp
+hcom archive --here
+```
+
+This filters both the archive list AND queries:
+
+```bash
+hcom archive --here             # Only archives with agents from ~/projects/myapp
+hcom archive 1 --here           # Events from agents in ~/projects/myapp
+```
+
+## SQL Queries
+
+Use `--sql` for advanced filtering:
+
+```bash
+hcom archive 1 --sql "type='message' AND instance='luna'"
+hcom archive 1 --sql "type='status' AND json_extract(data, '$.status')='blocked'"
+hcom archive 1 --sql "type='life' AND json_extract(data, '$.action')='stopped'"
+```
+
+### Available Fields
+
+From `events_v` view:
+
+```
+Base:        id, timestamp, type, instance
+msg_*:       from, text, scope, sender_kind, delivered_to[], mentions[]
+status_*:    val, context, detail
+life_*:      action, by, batch_id, reason
+```
+
+### Examples
+
+<CodeGroup>
+
+```bash Messages only
+hcom archive 1 --sql "type='message'"
+```
+
+```bash From specific agent
+hcom archive 1 --sql "instance='luna'"
+```
+
+```bash Status changes
+hcom archive 1 --sql "type='status' AND status_val='blocked'"
+```
+
+```bash Life events
+hcom archive 1 --sql "type='life' AND life_action='created'"
+```
+
+```bash Combined filters
+hcom archive 1 --sql "type='message' AND msg_from='luna' AND timestamp > '2026-03-04'"
+```
+
+</CodeGroup>
+
+## JSON Output
+
+```bash
+hcom archive --json
+```
+
+**Output:**
+
+```json
+{
+  "archives": [
+    {
+      "index": 1,
+      "name": "session-2026-03-04_143022",
+      "path": "~/.hcom/archive/session-2026-03-04_143022",
+      "timestamp": "2026-03-04_143022",
+      "size_bytes": 245760,
+      "created": 1709564222.0,
+      "events": 127,
+      "instances": 4
+    }
+  ],
+  "count": 1
+}
+```
+
+### Event JSON
+
+```bash
+hcom archive 1 --json
+```
+
+```json
+[
+  {
+    "id": 1,
+    "timestamp": "2026-03-04T14:30:22Z",
+    "type": "message",
+    "instance": "luna",
+    "data": {
+      "from": "nova",
+      "text": "Task complete",
+      "scope": "mentions",
+      "mentions": ["luna"]
+    }
+  }
+]
+```
+
+## Common Queries
+
+<AccordionGroup>
+  <Accordion title="Find messages to a specific agent">
+    ```bash
+    hcom archive 1 --sql "type='message' AND msg_delivered_to LIKE '%luna%'"
+    ```
+  </Accordion>
+  
+  <Accordion title="Find when an agent was stopped">
+    ```bash
+    hcom archive 1 --sql "type='life' AND instance='luna' AND life_action='stopped'"
+    ```
+  </Accordion>
+  
+  <Accordion title="Find all file edit events">
+    ```bash
+    hcom archive 1 --sql "type='status' AND status_context LIKE 'tool:Edit%'"
+    ```
+  </Accordion>
+  
+  <Accordion title="Find blocked/approval events">
+    ```bash
+    hcom archive 1 --sql "type='status' AND status_context='approval'"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Archive Structure
+
+Each archive contains:
+
+```
+~/.hcom/archive/session-{timestamp}/
+  hcom.db           # Complete database snapshot
+  hcom.db-wal       # WAL file (if exists)
+  hcom.db-shm       # Shared memory (if exists)
+```
+
+The database is a full SQLite copy with:
+
+- All events (messages, status changes, lifecycle)
+- All instance records (names, directories, transcripts, sessions)
+- Message read receipts
+- Subscriptions
+
+## Tips
+
+<Tip>
+  Archives are created automatically by `hcom reset`. You don't need to manually archive sessions.
+</Tip>
+
+<Tip>
+  Use `--here` when working on multiple projects to quickly find relevant archives.
+</Tip>
+
+<Warning>
+  Archives can be large. Use `--last N` to limit query results for performance.
+</Warning>
+
+## Troubleshooting
+
+### Archive not found
+
+If you get "Archive not found", run `hcom archive` to see available archives:
+
+```bash
+hcom archive                    # List all
+hcom archive --here             # List from current directory
+```
+
+### Empty archive
+
+If an archive shows 0 events/instances, it was likely created when the database was already empty (e.g., running `hcom reset` twice in a row).
+
+### SQL errors
+
+If your SQL query fails, check:
+
+1. Use single quotes for string values: `type='message'` not `type="message"`
+2. Use `<>` instead of `!=` for SQL negation
+3. Use `LIKE '%value%'` for JSON arrays like `delivered_to` and `mentions`

@@ -1,0 +1,385 @@
+---
+title: 'Debugging with Multiple Agents'
+description: 'Multi-agent debugging strategies and workflows'
+---
+
+## Overview
+
+Multiple agents can collaborate to debug issues faster by:
+
+- **Parallel investigation**: Multiple agents check different potential causes
+- **Specialization**: Each agent focuses on their domain (frontend, backend, DB, etc.)
+- **Second opinions**: One agent reviews another's conclusions
+- **Root cause analysis**: Systematic elimination of possibilities
+
+## Pattern 1: Parallel Investigation
+
+Launch multiple agents to investigate different hypotheses simultaneously.
+
+### Setup
+
+```bash
+# Launch investigators
+hcom 1 claude --tag debug-db --go --headless \
+  --hcom-system-prompt "You investigate database-related issues. \
+  Check: queries, indexes, connections, migrations, data integrity."
+
+hcom 1 claude --tag debug-api --go --headless \
+  --hcom-system-prompt "You investigate API-related issues. \
+  Check: endpoints, middleware, validation, serialization, auth."
+
+hcom 1 claude --tag debug-infra --go --headless \
+  --hcom-system-prompt "You investigate infrastructure issues. \
+  Check: containers, services, networks, resources, configs."
+
+# Launch coordinator
+hcom 1 claude --tag debug-lead --go --hcom-prompt "
+Bug report: Users seeing 500 errors on /api/users endpoint.
+Error rate: 30% of requests failing.
+
+Distribute investigation:
+
+1. Send to specialists:
+   hcom send '@debug-db Check database for /api/users issues' --thread debug-123
+   hcom send '@debug-api Check API code for /api/users issues' --thread debug-123  
+   hcom send '@debug-infra Check infra for /api/users issues' --thread debug-123
+
+2. Wait for findings (timeout 180s):
+   hcom events --wait 180 --thread debug-123 --type message
+
+3. Analyze findings:
+   - Identify root cause
+   - Propose fix
+   - Send summary to @reporter
+"
+```
+
+### Trigger
+
+```bash
+hcom send '@debug-lead 500 errors on /api/users, 30% failure rate' \
+  --from reporter --thread debug-123
+```
+
+## Pattern 2: Systematic Elimination
+
+Agents work through a checklist, eliminating possibilities one by one.
+
+### Example
+
+```bash
+hcom 1 claude --tag debugger --go --hcom-prompt "
+Issue: Login form not submitting
+
+Systematic debugging:
+
+1. Check browser console:
+   - Any JavaScript errors?
+   - Network requests failing?
+   - Broadcast: hcom send '@team BROWSER: [findings]'
+
+2. Check API logs:
+   - Is /api/auth/login receiving requests?
+   - What status codes?
+   - Broadcast: hcom send '@team API: [findings]'
+
+3. Check database:
+   - Are queries executing?
+   - Any connection issues?
+   - Broadcast: hcom send '@team DB: [findings]'
+
+4. Check auth service:
+   - Is JWT validation working?
+   - Token generation?
+   - Broadcast: hcom send '@team AUTH: [findings]'
+
+5. After each check:
+   - If issue found: STOP and report
+   - If no issue: Continue to next
+"
+```
+
+## Pattern 3: Second Opinion
+
+One agent debugs, another reviews their findings.
+
+### Primary Debugger
+
+```bash
+hcom 1 claude --tag debugger --go --headless \
+  --hcom-prompt "Debug the pagination bug in src/api/users.ts. \
+  Investigate thoroughly. When you find the issue, send findings to @reviewer."
+```
+
+### Reviewer
+
+```bash
+hcom 1 claude --tag reviewer --go --hcom-prompt "
+Wait for @debugger's findings:
+  hcom listen --from debugger --timeout 300
+
+When received:
+1. Review their analysis
+2. Check their evidence
+3. Try to reproduce their conclusion
+4. Verify the fix they propose
+
+Send verdict:
+  hcom send '@debugger @lead [APPROVED/NEEDS_MORE_INVESTIGATION]: [reasoning]'
+"
+```
+
+## Pattern 4: Bisect with Multiple Agents
+
+Find which commit broke functionality using parallel bisecting.
+
+```bash
+#!/usr/bin/env bash
+# Parallel git bisect
+set -euo pipefail
+
+commits=($(git log --oneline -n 20 | cut -d' ' -f1))
+mid=$((${#commits[@]} / 2))
+
+# Test first half
+hcom 1 claude --tag bisect-a --go --headless --hcom-prompt "
+git checkout ${commits[0]}
+npm test -- users.test.ts
+if passing: hcom send '@lead FIRST_HALF: passing'
+if failing: hcom send '@lead FIRST_HALF: failing'"
+
+# Test second half  
+hcom 1 claude --tag bisect-b --go --headless --hcom-prompt "
+git checkout ${commits[$mid]}
+npm test -- users.test.ts
+if passing: hcom send '@lead SECOND_HALF: passing'
+if failing: hcom send '@lead SECOND_HALF: failing'"
+
+# Coordinator narrows down based on results
+# Continue bisecting in failing half
+```
+
+## Pattern 5: Reproduce and Monitor
+
+One agent reproduces the bug, another monitors logs/metrics.
+
+### Reproducer
+
+```bash
+hcom 1 claude --tag reproducer --go --headless \
+  --hcom-prompt "Reproduce the bug: \
+  1. Visit http://localhost:3000/login \
+  2. Enter email: test@example.com, password: wrong \
+  3. Submit form \
+  4. Observe behavior \
+  \
+  Send observations to @monitor"
+```
+
+### Monitor
+
+```bash
+hcom 1 claude --tag monitor --go --hcom-prompt "
+Monitor while @reproducer tests:
+
+1. Tail logs:
+   tail -f logs/api.log logs/db.log
+
+2. Watch for errors/warnings
+
+3. Check metrics:
+   - Response times
+   - Error rates
+   - Resource usage
+
+4. When @reproducer sends observations:
+   - Correlate with log timestamps
+   - Identify anomalies
+   - Send diagnosis to @reproducer @lead
+"
+```
+
+## Complete Debugging Script
+
+Create `~/.hcom/scripts/debug.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Multi-agent debugging workflow
+set -euo pipefail
+
+issue="$1"
+if [[ -z "$issue" ]]; then
+  echo "Usage: hcom run debug 'description'"
+  exit 1
+fi
+
+thread="debug-$(date +%s)"
+LAUNCHED_NAMES=()
+
+cleanup() {
+  for name in "${LAUNCHED_NAMES[@]}"; do
+    hcom stop "$name" --go 2>/dev/null || true
+  done
+}
+trap cleanup ERR
+
+track_launch() {
+  names=$(echo "$1" | grep '^Names: ' | sed 's/^Names: //')
+  for n in $names; do LAUNCHED_NAMES+=("$n"); done
+}
+
+echo "Starting debug session: ${issue}"
+echo "Thread: ${thread}"
+
+# Launch specialists
+echo "Launching specialists..."
+
+out=$(hcom 1 claude --tag debug-code --go --headless \
+  --hcom-system-prompt "Code debugger. Check: logic errors, type errors, null checks, edge cases." 2>&1)
+track_launch "$out"
+
+out=$(hcom 1 claude --tag debug-data --go --headless \
+  --hcom-system-prompt "Data debugger. Check: DB queries, data flow, state management, caching." 2>&1)
+track_launch "$out"
+
+out=$(hcom 1 claude --tag debug-env --go --headless \
+  --hcom-system-prompt "Environment debugger. Check: configs, env vars, dependencies, services." 2>&1)
+track_launch "$out"
+
+# Launch coordinator
+out=$(hcom 1 claude --tag debug-lead --go --hcom-prompt "
+ISSUE: ${issue}
+THREAD: ${thread}
+
+Debug workflow:
+
+1. Distribute investigation:
+   hcom send '@debug-code @debug-data @debug-env Investigate: ${issue}' \
+     --thread ${thread} --intent request
+
+2. Collect findings (wait 180s):
+   hcom events --wait 180 --thread ${thread} --type message --last 10
+
+3. Analyze findings:
+   - Look for common threads
+   - Identify most likely root cause
+   - Verify with targeted tests
+
+4. Propose fix:
+   - What to change
+   - Why it fixes the issue  
+   - How to verify
+
+5. Send summary:
+   hcom send '@team ## Debug Summary
+   
+   ROOT CAUSE: [description]
+   FIX: [description]
+   VERIFICATION: [steps]' --thread ${thread}
+
+6. Stop specialists:
+   hcom stop @debug-code @debug-data @debug-env
+" 2>&1)
+track_launch "$out"
+
+echo
+echo "Debug session active. Watch progress:"
+echo "  hcom events --wait 300 --thread ${thread}"
+echo
+echo "Or in TUI:"
+echo "  hcom"
+echo
+
+# Wait for completion
+hcom events --wait 300 --thread "${thread}" \
+  --sql "msg_text LIKE '%Debug Summary%'" >/dev/null || true
+
+echo
+echo "Debug session complete. Results:"
+hcom events --thread "${thread}" --type message --last 5
+
+# Cleanup
+cleanup
+trap - ERR
+```
+
+Usage:
+
+```bash
+hcom run debug "Login form returns 500 on submit"
+hcom run debug "Pagination broken after deploy"
+hcom run debug "Memory leak in API server"
+```
+
+## Debugging Tools
+
+### Subscribe to errors
+
+```bash
+# Agent subscribes to file edit events
+hcom events sub --file '*.py' --context 'tool:Edit'
+
+# When file changes, agent re-runs tests
+```
+
+### Monitor test runs
+
+```bash
+# Agent watches for test command execution
+hcom events sub --cmd 'pytest'
+
+# When tests run, agent checks results and reports failures
+```
+
+### Track agent activity
+
+```bash
+# Watch what debugger is doing
+hcom events --agent debugger --last 10 --wait 60
+```
+
+## Tips
+
+<Tip>
+  Use `--thread` to keep debug messages organized and queryable.
+</Tip>
+
+<Tip>
+  Set timeouts based on investigation complexity. Simple bugs: 60s, complex: 180s+.
+</Tip>
+
+<Tip>
+  Have agents report negative findings ("DB is fine") to eliminate possibilities.
+</Tip>
+
+<Warning>
+  Don't spawn too many debugging agents. 3-4 specialists + 1 coordinator is optimal.
+</Warning>
+
+## Troubleshooting
+
+### Agents finding different root causes
+
+```bash
+# Coordinator reconciles:
+hcom send '@debug-code @debug-data Which finding explains ALL symptoms?' \
+  --thread debug-123
+```
+
+### Debug timeout without conclusion
+
+```bash
+# Query what agents found so far:
+hcom events --thread debug-123 --type message --last 20
+
+# Extend investigation:
+hcom send '@debug-lead Continue investigation, focus on [area]' --thread debug-123
+```
+
+### False positive
+
+```bash
+# Verify with second agent:
+hcom send '@reviewer Verify debugger's finding: [description]' --thread debug-123
+```

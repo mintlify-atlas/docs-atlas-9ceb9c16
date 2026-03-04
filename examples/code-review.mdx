@@ -1,0 +1,267 @@
+---
+title: 'Multi-Agent Code Review'
+description: 'Distributed code review workflow with specialized reviewers'
+---
+
+## Overview
+
+Multiple agents with different expertise review code changes in parallel, then a coordinator consolidates feedback and sends it to the author.
+
+## Workflow
+
+<Steps>
+  <Step title="Launch specialized reviewers">
+    Spawn agents with different focus areas: security, performance, style, tests.
+  </Step>
+  <Step title="Distribute review tasks">
+    Each reviewer analyzes the code from their perspective.
+  </Step>
+  <Step title="Collect feedback">
+    Reviewers send findings to coordinator via hcom messages.
+  </Step>
+  <Step title="Consolidate and report">
+    Coordinator merges feedback and sends final review to author.
+  </Step>
+</Steps>
+
+## Example
+
+### Launch Reviewers
+
+```bash
+# Security reviewer
+hcom 1 claude --tag security --go --headless \
+  --hcom-system-prompt "You are a security-focused code reviewer. \
+  Look for: SQL injection, XSS, CSRF, auth bypasses, crypto misuse, \
+  secret leaks, insecure dependencies. Be thorough but pragmatic."
+
+# Performance reviewer  
+hcom 1 claude --tag performance --go --headless \
+  --hcom-system-prompt "You are a performance-focused code reviewer. \
+  Look for: N+1 queries, inefficient algorithms, memory leaks, \
+  blocking I/O, missing indexes, unoptimized loops."
+
+# Style reviewer
+hcom 1 claude --tag style --go --headless \
+  --hcom-system-prompt "You are a code style reviewer. \
+  Look for: naming conventions, code organization, readability, \
+  documentation gaps, test coverage, error handling patterns."
+
+# Test reviewer
+hcom 1 claude --tag tests --go --headless \
+  --hcom-system-prompt "You are a test quality reviewer. \
+  Look for: edge cases, test coverage gaps, flaky tests, \
+  missing assertions, integration test needs."
+```
+
+### Launch Coordinator
+
+```bash
+hcom 1 claude --tag coordinator --go --hcom-prompt "
+1. Wait for author to send code changes:
+   hcom listen --timeout 300 --from author
+
+2. Get the changed files from the message
+
+3. Send review request to all reviewers:
+   hcom send '@security- @performance- @style- @tests- \
+     Review these changes: [list files]. \
+     Send findings to @coordinator- with format: \
+     SEVERITY: [critical|high|medium|low] \
+     FILE:LINE: issue description' \
+     --thread code-review --intent request
+
+4. Collect reviews (wait for 4 responses):
+   hcom events --wait 120 --thread code-review --type message --last 10
+
+5. Consolidate feedback:
+   - Group by severity
+   - Deduplicate similar issues  
+   - Prioritize critical/high issues
+
+6. Send consolidated review to author:
+   hcom send '@author ## Code Review Summary
+   
+   CRITICAL: [list]
+   HIGH: [list]
+   MEDIUM: [list]
+   LOW: [list]
+   
+   Overall: [approve/request changes/reject]' \
+     --thread code-review
+"
+```
+
+### Trigger Review
+
+From your agent:
+
+```bash
+hcom send '@coordinator- Review PR #123: \
+  src/auth/login.py \
+  src/auth/jwt.py \
+  tests/test_login.py' \
+  --from author --thread code-review --intent request
+```
+
+## Parallel Review with Bundles
+
+For complex reviews, attach context bundles:
+
+```bash
+# Create bundle with changed files and related context
+hcom bundle create "PR #123 - JWT authentication refactor" \
+  --description "Refactored JWT handling with new refresh token flow" \
+  --files src/auth/login.py,src/auth/jwt.py,tests/test_login.py \
+  --transcript 10-15:detailed \
+  --events 50-75
+
+# Send to reviewers with bundle
+hcom send '@security- @performance- Review attached changes' \
+  --thread code-review \
+  --title "PR #123 Review Request" \
+  --description "JWT authentication refactor" \
+  --files src/auth/login.py,src/auth/jwt.py,tests/test_login.py
+```
+
+## Complete Example Script
+
+Create `~/.hcom/scripts/review.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Multi-agent code review workflow
+set -euo pipefail
+
+files="$1"
+thread="review-$(date +%s)"
+
+# Launch reviewers
+echo "Launching reviewers..."
+
+hcom 1 claude --tag security --go --headless \
+  --hcom-system-prompt "Security code reviewer. Find vulnerabilities."
+
+hcom 1 claude --tag performance --go --headless \
+  --hcom-system-prompt "Performance code reviewer. Find bottlenecks."
+
+hcom 1 claude --tag style --go --headless \
+  --hcom-system-prompt "Style code reviewer. Check conventions."
+
+# Launch coordinator
+hcom 1 claude --tag coordinator --go --hcom-prompt "
+Thread: ${thread}
+Files: ${files}
+
+1. Send files to reviewers:
+   hcom send '@security- @performance- @style- Review ${files}' \
+     --thread ${thread} --intent request
+
+2. Wait for 3 reviews:
+   hcom events --wait 180 --thread ${thread} --type message
+
+3. Consolidate and report:
+   hcom send '@author ## Review Complete
+   
+   [consolidated findings]' --thread ${thread}
+"
+
+echo "Review started in thread: ${thread}"
+echo "Watch: hcom events --wait 300 --thread ${thread}"
+```
+
+```bash
+hcom run review "src/auth/*.py"
+```
+
+## Review Template
+
+Reviewers can use this format:
+
+```markdown
+## [SECURITY] Review
+
+CRITICAL:
+- src/auth/login.py:42 - SQL injection in raw query
+- src/auth/jwt.py:18 - Secret key hardcoded
+
+HIGH:
+- src/auth/login.py:67 - Missing rate limiting
+
+MEDIUM:
+- src/auth/jwt.py:89 - Token expiry too long (24h)
+
+LOW:
+- tests/test_login.py:12 - Missing negative test cases
+
+OVERALL: REQUEST CHANGES (2 critical issues)
+```
+
+## Advanced: Incremental Review
+
+Review files one at a time and track progress:
+
+```bash
+# Coordinator tracks reviewed files
+hcom config -i coordinator notes "reviewed: []"
+
+# For each file:
+# 1. Check if already reviewed
+# 2. Send to reviewers
+# 3. Update notes with file:status
+# 4. Continue to next file
+```
+
+## Tips
+
+<Tip>
+  Use `--thread` to keep review messages organized and easy to query.
+</Tip>
+
+<Tip>
+  Set review timeouts based on codebase size. Large PRs need more time.
+</Tip>
+
+<Tip>
+  Launch reviewers with `--headless` to run in background without terminal windows.
+</Tip>
+
+<Warning>
+  Don't launch too many parallel reviewers. 3-4 is usually optimal for coordination.
+</Warning>
+
+## Troubleshooting
+
+### Reviewers not responding
+
+Check if they're idle:
+
+```bash
+hcom list
+hcom events --agent security- --last 5
+```
+
+Resend request:
+
+```bash
+hcom send '@security- Did you see the review request?' --thread code-review
+```
+
+### Coordinator missed reviews
+
+Query thread manually:
+
+```bash
+hcom events --thread code-review --type message --last 20
+```
+
+### Review timeout
+
+Increase timeout or split into smaller chunks:
+
+```bash
+# Instead of all files at once
+hcom send '@security- Review src/auth/login.py' --thread code-review
+# Wait for response
+hcom send '@security- Review src/auth/jwt.py' --thread code-review
+```

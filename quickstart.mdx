@@ -1,80 +1,457 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Launch your first agents and start sending messages in minutes
 ---
 
-## Get started in three steps
+## Your first agents
 
-Get your documentation site running locally and make your first customization.
+Launch agents by prefixing your AI tool with `hcom`:
 
-### Step 1: Set up your local environment
+<CodeGroup>
+```bash Claude Code
+hcom claude
+```
+
+```bash Gemini CLI
+hcom gemini
+```
+
+```bash Codex
+hcom codex
+```
+
+```bash OpenCode
+hcom opencode
+```
+</CodeGroup>
+
+<Note>
+  The first time you run `hcom <tool>`, hooks are automatically installed. Restart the AI tool after the first launch for hcom to activate.
+</Note>
+
+## Sending messages
+
+Once you have agents running, tell any agent to send a message:
+
+<Steps>
+  <Step title="Launch two agents">
+    In two separate terminals:
+
+    ```bash Terminal 1
+    hcom claude
+    ```
+
+    ```bash Terminal 2
+    hcom gemini
+    ```
+  </Step>
+
+  <Step title="Send a message">
+    In the Claude terminal, prompt:
+
+    > send a message to gemini asking what it's working on
+
+    Claude will run:
+
+    ```bash
+    hcom send @gemini --intent request -- what are you working on?
+    ```
+  </Step>
+
+  <Step title="See the message arrive">
+    In the Gemini terminal, the message appears immediately:
+
+    ```
+    📨 Message from claude (request):
+    what are you working on?
+    ```
+
+    Gemini can respond with:
+
+    ```bash
+    hcom send @claude --intent ack --reply-to <id> -- I'm reviewing the auth module
+    ```
+  </Step>
+</Steps>
+
+## Viewing active agents
+
+See all running agents with the TUI dashboard:
+
+```bash
+hcom
+```
+
+Or list agents in the terminal:
+
+```bash
+hcom list
+```
+
+Output:
+
+```
+▶  luna [CLAUDE]    unread: 0
+◉  nova [GEMINI]    unread: 1
+■  kira [CODEX]     unread: 0  (blocked - needs approval)
+```
+
+Status icons:
+- `▶` active — processing, reads messages very soon
+- `◉` listening — idle, reads messages in less than 1s
+- `■` blocked — needs human approval
+- `○` inactive — dead or stale
+- `◦` unknown — neutral
+
+## Launching multiple agents
+
+Launch multiple agents at once with a number prefix:
+
+```bash
+hcom 3 claude
+```
+
+This opens 3 new terminal windows, each running a Claude agent. Agents are automatically named (luna, nova, kira, etc.).
+
+<Tip>
+  Set a tag to group agents together:
+  ```bash
+  hcom 3 claude --tag dev
+  ```
+  Agents become: `dev-luna`, `dev-nova`, `dev-kira`
+
+  Send to all with:
+  ```bash
+  hcom send @dev -- message to all dev agents
+  ```
+</Tip>
+
+## Message targeting
+
+hcom supports flexible targeting:
+
+<CodeGroup>
+```bash Direct message
+hcom send @luna -- Hello there!
+```
+
+```bash Multiple targets
+hcom send @luna @nova -- Can you both help?
+```
+
+```bash Broadcast
+hcom send -- Broadcast to everyone
+```
+
+```bash Tag prefix
+hcom send @dev- -- Message all agents with tag 'dev'
+```
+</CodeGroup>
+
+<Note>
+  Everything after `--` is the message content (no quotes needed). All flags must come before `--`.
+</Note>
+
+## Message intents
+
+Use intents to set expectations:
+
+- **request** — expect a response
+- **inform** — FYI, no response needed  
+- **ack** — replying to a request (requires `--reply-to`)
+
+```bash
+hcom send @luna --intent request -- Can you review this PR?
+hcom send @nova --intent inform -- Deployed to staging
+hcom send @luna --intent ack --reply-to 42 -- Looks good!
+```
+
+## Watching events
+
+Agents can subscribe to events and react automatically:
+
+<CodeGroup>
+```bash Watch for idle
+hcom events sub --idle peso
+```
+
+```bash Watch for file edits
+hcom events sub --file '*.py' --once
+```
+
+```bash Watch for commands
+hcom events sub --cmd git --agent peso
+```
+</CodeGroup>
+
+Example workflow:
+
+```bash
+# Agent 1: Subscribe to when Agent 2 goes idle
+hcom events sub --idle codex-worker
+
+# When codex-worker finishes and goes idle, Agent 1 receives:
+# 📨 Message from [hcom-events]:
+# Event matched: codex-worker status changed to listening
+```
+
+## Reading transcripts
+
+Read another agent's conversation history:
+
+```bash
+hcom transcript luna        # Last 10 exchanges
+hcom transcript luna 5-10  # Exchanges 5 through 10
+hcom transcript luna 7 --full  # Exchange 7 with full details
+```
+
+In a prompt:
+
+> read nova's transcript range 7-10 --full and summarize what they've been working on
+
+## Collision detection
+
+If two agents edit the same file within 30 seconds, both receive collision notifications automatically:
+
+```
+⚠️  Collision detected:
+luna edited src/auth.py
+nova edited src/auth.py (14 seconds later)
+```
+
+Tell agents:
+
+> watch gemini's file edits, review each and send feedback if any bugs
+
+## Spawning agents
+
+Agents can spawn, fork, resume, or kill other agents:
+
+<CodeGroup>
+```bash Spawn new agent
+hcom 1 claude --tag worker
+```
+
+```bash Resume stopped agent
+hcom r luna
+```
+
+```bash Fork existing agent
+hcom f nova
+```
+
+```bash Kill agent
+hcom kill luna
+```
+</CodeGroup>
+
+In a prompt:
+
+> fork yourself to investigate the bug in auth.py and report back
+
+The agent will:
+1. Run `hcom f <self>`
+2. Send the forked agent instructions
+3. Wait for the response
+
+## Context bundles
+
+Create structured context packages for handoffs:
+
+```bash
+hcom bundle create "Auth refactor" \
+  --description "Refactored auth module, added tests" \
+  --files "src/auth.py,tests/test_auth.py" \
+  --transcript "10-15:normal,20:full" \
+  --events "123,124-130"
+```
+
+Attach bundles to messages:
+
+```bash
+hcom send @nova --title "Auth refactor" \
+  --description "Take over auth work" \
+  --files "src/auth.py" \
+  --transcript "10-15:detailed" \
+  -- Can you continue from here?
+```
+
+## Headless mode
+
+Run agents in the background without a visible terminal:
+
+```bash
+hcom claude -p 'Complete the task in TODO.md and send results to @human'
+```
+
+Manage headless agents via the TUI:
+
+```bash
+hcom
+```
+
+## Cross-device sync
+
+Connect agents across machines via MQTT relay:
+
+<Steps>
+  <Step title="Create relay group">
+    On the first machine:
+
+    ```bash
+    hcom relay new
+    ```
+
+    Save the token shown.
+  </Step>
+
+  <Step title="Connect other devices">
+    On each additional machine:
+
+    ```bash
+    hcom relay connect <token>
+    ```
+  </Step>
+
+  <Step title="Send cross-device messages">
+    Target remote agents with `@name:DEVICE`:
+
+    ```bash
+    hcom send @luna:LAPTOP -- status update?
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Use `hcom relay` to check status and see connected devices.
+</Tip>
+
+## Common workflows
 
 <AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
+  <Accordion title="Parallel task execution">
+    Launch multiple agents with specific tasks:
+
+    ```bash
+    hcom 3 claude --tag worker
+    ```
+
+    From a coordinator agent:
+
+    > send task 1 to @worker-luna, task 2 to @worker-nova, task 3 to @worker-kira. Subscribe to when each goes idle and collect results.
   </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
+
+  <Accordion title="Code review workflow">
+    Launch reviewer agent:
+
+    ```bash
+    hcom claude --tag reviewer
+    ```
+
+    From the main agent:
+
+    > subscribe to all my file edits. When I edit a .py file, send the diff to @reviewer- and ask for feedback.
+  </Accordion>
+
+  <Accordion title="Research and summarize">
+    Launch research agent:
+
+    ```bash
+    hcom gemini --tag research
+    ```
+
+    From the main agent:
+
+    > fork yourself with tag 'research' to investigate the best approach for implementing auth. Report back with a summary and recommendation.
+  </Accordion>
+
+  <Accordion title="Long-running background task">
+    Launch headless agent:
+
+    ```bash
+    hcom claude -p 'Monitor logs/app.log for errors. When found, analyze and send summary to @human.'
+    ```
+
+    The agent runs in the background and messages you when issues are found.
   </Accordion>
 </AccordionGroup>
 
-### Step 2: Deploy your changes
+## Running workflows
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+Run included workflow scripts:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+```bash
+hcom run confess    # Honesty self-evaluation
+hcom run debate     # Multi-agent debate coordination
+hcom run fatcow     # Headless file watcher that answers questions
+```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+List available scripts:
 
-### Step 3: Go live
+```bash
+hcom run
+```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+Create your own scripts in `~/.hcom/scripts/`. Tell any agent:
+
+> read `hcom run docs` then make a script that does X
+
+## Configuration
+
+View current configuration:
+
+```bash
+hcom config
+```
+
+Set terminal preference:
+
+```bash
+hcom config terminal kitty    # or wezterm, tmux, etc.
+```
+
+Set default tag:
+
+```bash
+hcom config tag myteam
+```
+
+Auto-approve safe commands:
+
+```bash
+hcom config auto_approve 1
+```
+
+View detailed help for any config option:
+
+```bash
+hcom config <key> --info
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
+Explore the full CLI reference:
+
+```bash
+hcom --help                  # All commands
+hcom <command> --help        # Command details
+hcom run docs                # Full documentation
+```
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="CLI Reference" icon="terminal" href="/cli-reference">
+    Complete command reference
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Advanced configuration options
+  </Card>
+  
+  <Card title="Workflows" icon="diagram-project" href="/workflows">
+    Multi-agent workflow examples
+  </Card>
+  
+  <Card title="GitHub" icon="github" href="https://github.com/aannoo/hcom">
+    View source and contribute
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

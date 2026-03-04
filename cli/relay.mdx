@@ -1,0 +1,545 @@
+---
+title: 'hcom relay'
+description: 'Cross-device sync via MQTT pub/sub'
+---
+
+## Overview
+
+The `hcom relay` command enables cross-device synchronization of agents, messages, and events via MQTT. Share agent state across machines, laptops, servers, and cloud instances.
+
+## Quick Start
+
+### Device 1 (Create Relay Group)
+
+```bash
+# Create new relay group
+hcom relay new
+```
+
+**Output:**
+```
+Testing brokers...
+  broker.emqx.io:8883 — 45ms
+  broker.hivemq.com:8883 — 78ms
+  test.mosquitto.org:8883 — 120ms
+
+Broker: mqtts://broker.emqx.io:8883
+
+On other devices: hcom relay connect <token>
+```
+
+### Device 2 (Join Relay Group)
+
+```bash
+# Connect with token
+hcom relay connect <token>
+```
+
+**Output:**
+```
+Broker: mqtts://broker.emqx.io:8883 (45ms)
+
+Connected.
+```
+
+## Relay Status
+
+```bash
+# Show relay status
+hcom relay
+hcom relay status
+```
+
+**Output:**
+```
+Status: connected
+Broker: mqtts://broker.emqx.io:8883 (45ms)
+Device ID: 4a3f
+Queued: up to date
+Last push: 5s ago
+
+Remote devices: 7c2e (10s ago)
+
+Add devices: hcom relay connect <token>
+```
+
+**Status states:**
+- `connected` - MQTT active, syncing
+- `error (reason)` - Connection failed
+- `waiting (daemon may not be running)` - Daemon not started
+- `disabled` - Sync disabled
+- `not configured` - No relay setup
+
+## Create Relay Group
+
+### Public Brokers (default)
+
+```bash
+# Test and select fastest broker
+hcom relay new
+```
+
+Tests public brokers in parallel:
+- broker.emqx.io:8883
+- broker.hivemq.com:8883
+- test.mosquitto.org:8883
+
+Selects the fastest responding broker.
+
+### Private Broker
+
+```bash
+# Use custom broker
+hcom relay new --broker mqtts://my-broker.example.com:8883
+
+# With authentication
+hcom relay new --broker mqtts://my-broker.example.com:8883 --password secret123
+```
+
+**Broker URL formats:**
+- `mqtts://host:port` - TLS encrypted (recommended)
+- `mqtt://host:port` - Unencrypted (local only)
+
+## Connect to Relay
+
+### Join with Token
+
+```bash
+# Connect using token from another device
+hcom relay connect <token>
+
+# With password (private broker)
+hcom relay connect <token> --password secret123
+
+# Override broker from token
+hcom relay connect <token> --broker mqtts://different-broker.com:8883
+```
+
+### Re-enable Existing Relay
+
+```bash
+# Re-enable after 'relay off'
+hcom relay connect
+```
+
+## Disable Relay
+
+```bash
+# Disable sync temporarily
+hcom relay off
+hcom relay disconnect
+```
+
+**Effect:**
+- Stops syncing events
+- Clears retained MQTT state
+- Remote devices stop seeing your agents
+- Config preserved (can re-enable with `relay connect`)
+
+## Relay Daemon
+
+Manage the background relay worker process.
+
+### Show Daemon Status
+
+```bash
+hcom relay daemon
+```
+
+**Output:**
+```
+Relay daemon: running (PID 12345)
+```
+
+### Start Daemon
+
+```bash
+hcom relay daemon start
+```
+
+**Effect:**
+- Starts background worker
+- Connects to MQTT broker
+- Begins syncing events
+
+### Stop Daemon
+
+```bash
+hcom relay daemon stop
+```
+
+**Effect:**
+- Graceful shutdown
+- SIGKILL after 5s if hung
+- Cleans up PID file
+
+### Restart Daemon
+
+```bash
+hcom relay daemon restart
+```
+
+**Use cases:**
+- Apply config changes
+- Recover from errors
+- Update daemon code
+
+## What Gets Synced
+
+### Events
+
+- Messages between agents
+- Status changes (active/listening/blocked)
+- File edits (with collision detection)
+- Command executions
+- Lifecycle events (created/stopped)
+
+### Agents
+
+- Agent registration (name, tool, status)
+- Tags and display names
+- Session state (not transcripts)
+- Last heartbeat timestamps
+
+### NOT Synced
+
+- Transcripts (privacy)
+- Files (only paths tracked)
+- Config settings
+- Hooks
+
+## Remote Devices
+
+View and interact with agents on other devices.
+
+### List Remote Agents
+
+```bash
+# Show all agents
+hcom list
+```
+
+**Output:**
+```
+  ▶ luna                      [CLAUDE]   api    2s
+  ◉ nova:7c2e                 [GEMINI]   worker 5s
+  ▶ peso:7c2e                 [CODEX]    tester 3s
+```
+
+**Remote agents marked with:** `:DEVICE_ID`
+
+### Send Messages Cross-Device
+
+```bash
+# Send to remote agent
+hcom send @nova:7c2e -- status update
+
+# Send to all agents with name (any device)
+hcom send @nova -- hello
+
+# Send to all on specific device
+hcom send @:7c2e -- broadcast to device
+```
+
+### Query Remote Events
+
+```bash
+# Events from remote agents
+hcom events --agent nova:7c2e
+
+# All events across devices
+hcom events --all
+```
+
+## Device IDs
+
+Each device gets a 4-character short ID (FNV-1a hash of UUID).
+
+### View Your Device ID
+
+```bash
+hcom relay status | grep "Device ID"
+```
+
+**Output:**
+```
+Device ID: 4a3f
+```
+
+### Auto-generated
+
+- UUID stored in `~/.hcom/.tmp/device_id`
+- Short ID displayed in relay status
+- Used in remote agent names: `agent:DEVICE_ID`
+
+## Token Format
+
+Relay tokens encode:
+- Relay group UUID
+- MQTT broker URL (or index for public brokers)
+
+**Properties:**
+- Base64-encoded JSON
+- Shareable (no secrets)
+- Broker URL can be overridden with `--broker`
+- Authentication via separate `--password` flag
+
+## Broker Selection
+
+### Public Brokers
+
+Free, no setup required:
+- broker.emqx.io:8883
+- broker.hivemq.com:8883
+- test.mosquitto.org:8883
+
+**Pros:**
+- No configuration
+- Automatic selection
+- TLS encrypted
+
+**Cons:**
+- Shared infrastructure
+- Rate limits
+- Less control
+
+### Private Brokers
+
+Self-hosted or managed:
+
+```bash
+hcom relay new --broker mqtts://my-broker.com:8883 --password secret
+```
+
+**Pros:**
+- Full control
+- Better performance
+- Custom authentication
+- No rate limits
+
+**Cons:**
+- Requires setup
+- Must be accessible from all devices
+
+**Recommended:**
+- [Mosquitto](https://mosquitto.org/) (self-hosted)
+- [HiveMQ Cloud](https://www.hivemq.com/mqtt-cloud-broker/) (managed)
+- [EMQX Cloud](https://www.emqx.com/en/cloud) (managed)
+
+## Troubleshooting
+
+### Broker Unreachable
+
+```bash
+hcom relay status
+```
+
+**Output:**
+```
+Status: error (broker unreachable)
+Broker: mqtts://broker.emqx.io:8883 (unreachable)
+```
+
+**Solutions:**
+- Check network connectivity
+- Try different broker: `hcom relay new`
+- Use private broker with known availability
+
+### Authentication Errors
+
+```
+Status: error (not authorized)
+```
+
+**Solutions:**
+- Private broker requires password: `--password <secret>`
+- Verify password matches across devices
+- Check broker auth configuration
+
+### Daemon Not Running
+
+```
+Status: waiting (daemon may not be running)
+```
+
+**Solutions:**
+```bash
+# Start daemon
+hcom relay daemon start
+
+# Check status
+hcom relay daemon
+```
+
+### Events Not Syncing
+
+**Check queue:**
+```bash
+hcom relay status | grep Queued
+```
+
+**Output:**
+```
+Queued: 15 events pending
+```
+
+**Solutions:**
+- Daemon not running: `hcom relay daemon start`
+- Network issues: check broker connectivity
+- Restart daemon: `hcom relay daemon restart`
+
+### Remote Agents Not Visible
+
+**Check device list:**
+```bash
+hcom relay status
+```
+
+**No remote devices?**
+- Other devices may be offline
+- Relay may be disabled on other devices
+- Different relay groups (verify token)
+
+**Solutions:**
+- Verify all devices connected: `hcom relay status`
+- Check timestamps: devices >90s stale are hidden
+- Restart daemon: `hcom relay daemon restart`
+
+## Security
+
+### TLS Encryption
+
+All public brokers use `mqtts://` (TLS encrypted).
+
+**Verify:**
+```bash
+hcom relay status | grep Broker
+```
+
+**Expected:** `mqtts://` prefix
+
+### Relay Group UUID
+
+- Unique per group
+- Acts as namespace
+- Prevents cross-group contamination
+
+### Authentication
+
+Optional for private brokers:
+
+```bash
+hcom relay new --broker mqtts://host:port --password secret
+```
+
+**Note:** All devices in group need same password.
+
+### Data Privacy
+
+- Transcripts NOT synced
+- File contents NOT synced (only paths)
+- Message content synced (use private broker for sensitive data)
+
+## Examples
+
+### Laptop + Cloud Server
+
+**Laptop:**
+```bash
+hcom relay new
+# Copy token
+```
+
+**Server:**
+```bash
+hcom relay connect <token>
+hcom relay daemon start
+```
+
+**Use:**
+```bash
+# From laptop, send to server agent
+hcom send @worker:7c2e -- run tests
+
+# From server, send results back
+hcom send @luna:4a3f -- tests passed
+```
+
+### Multi-device Development
+
+**Desktop (main):**
+```bash
+hcom relay new
+hcom 3 claude --tag dev
+```
+
+**Laptop (remote):**
+```bash
+hcom relay connect <token>
+hcom 1 gemini --tag dev
+```
+
+**Send to all dev agents:**
+```bash
+hcom send @dev -- status check
+```
+
+### Team Coordination
+
+**Team lead:**
+```bash
+hcom relay new --broker mqtts://team-broker.com:8883 --password teampass
+hcom 1 claude --tag lead
+```
+
+**Team members:**
+```bash
+hcom relay connect <token> --password teampass
+hcom 2 claude --tag member
+```
+
+**Broadcast:**
+```bash
+hcom send @member -- new task available
+```
+
+## Configuration
+
+Relay settings stored in `~/.hcom/config.toml`:
+
+```toml
+[relay]
+url = "mqtts://broker.emqx.io:8883"
+id = "550e8400-e29b-41d4-a716-446655440000"
+token = "secret123"
+enabled = true
+```
+
+**Manage via commands:**
+```bash
+hcom relay new          # Set url, id
+hcom relay connect      # Enable
+hcom relay off          # Disable
+```
+
+**Direct edit (not recommended):**
+```bash
+hcom config --edit
+```
+
+## Tips
+
+- Use public brokers for quick setup
+- Private brokers for production/team use
+- Enable daemon on all devices for auto-sync
+- Use device IDs to target specific machines
+- Check relay status regularly
+- Restart daemon after config changes
+- Disable relay on battery-sensitive devices
+
+## See Also
+
+- [hcom list](/cli/list) - View remote agents
+- [hcom send](/cli/send) - Message remote agents
+- [hcom config](/cli/config) - Relay settings
+- [hcom status](/cli/status) - Verify relay connectivity

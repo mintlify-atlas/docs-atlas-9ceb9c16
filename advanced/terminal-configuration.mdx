@@ -1,0 +1,315 @@
+---
+title: Terminal Configuration
+description: Configure terminal emulators for seamless agent spawning and management
+---
+
+## Overview
+
+hcom can spawn AI agents in new terminal windows, tabs, or splits depending on your terminal emulator. Supported terminals include kitty, wezterm, tmux, and platform defaults.
+
+Terminals with **managed mode** support both opening new windows/tabs/splits and automatically closing them when you run `hcom kill`.
+
+## Supported Terminals
+
+### Fully Managed (Open + Close)
+
+**kitty** - Smart auto-detection:
+- `kitty-window` - New window
+- `kitty-tab` - New tab (requires remote control)
+- `kitty-split` - Split current window (requires remote control)
+- `kitty` - Auto-selects: split if inside kitty, tab if socket available, window otherwise
+
+**wezterm** - Smart auto-detection:
+- `wezterm-window` - New window
+- `wezterm-tab` - New tab (requires mux server)
+- `wezterm-split` - Split current pane (requires mux server)
+- `wezterm` - Auto-selects: split if inside wezterm, tab if mux reachable, window otherwise
+
+**tmux** - Background sessions:
+- `tmux-split` - Split current pane
+- `tmux` - Creates detached background sessions
+
+### Open Only
+
+These terminals open new windows but cannot automatically close on `hcom kill`:
+
+- `Terminal.app` (macOS)
+- `iTerm` (macOS)
+- `Ghostty`
+- `alacritty`
+- `ttab` (macOS tab helper)
+- `wttab` (Windows Terminal tab helper)
+- `gnome-terminal` (Linux)
+- `konsole` (Linux)
+- `xterm` (Linux)
+- `tilix` (Linux)
+- `terminator` (Linux)
+- `Windows Terminal`
+- `mintty` (Windows/Cygwin)
+
+## Setting Your Terminal
+
+### Quick Setup
+
+```bash
+# Set your preferred terminal
+hcom config terminal kitty
+hcom config terminal wezterm
+hcom config terminal tmux
+
+# Reset to platform default
+hcom config terminal default
+
+# See available terminals and their status
+hcom config terminal --info
+```
+
+### Platform Defaults
+
+- **macOS**: `Terminal.app`
+- **Linux**: First available of `gnome-terminal`, `konsole`, `xterm`
+- **WSL**: Windows Terminal (`wt.exe`) if available
+- **Termux**: Android intent system
+
+## Kitty Configuration
+
+Kitty tabs and splits require **remote control** to be enabled.
+
+### Enable Remote Control
+
+Add to `~/.config/kitty/kitty.conf`:
+
+```conf
+allow_remote_control yes
+listen_on unix:/tmp/kitty
+```
+
+Then restart kitty.
+
+### Verify Remote Control
+
+```bash
+# Inside kitty, check for socket
+echo $KITTY_LISTEN_ON
+# Should output: unix:/tmp/kitty (or similar)
+
+# Test remote control
+kitten @ ls
+# Should list windows and tabs
+```
+
+### Auto-Detection
+
+When you set `terminal` to `kitty`, hcom automatically detects the best mode:
+
+1. **Inside kitty window** → uses `kitty-split`
+2. **Remote control available** → uses `kitty-tab`
+3. **Otherwise** → falls back to `kitty-window`
+
+## WezTerm Configuration
+
+WezTerm tabs and splits require the **mux server** to be running.
+
+### Start Mux Server
+
+The mux server usually starts automatically, but you can verify:
+
+```bash
+# Check if mux is reachable
+wezterm cli list
+```
+
+If this works, remote operations are available.
+
+### Auto-Detection
+
+When you set `terminal` to `wezterm`, hcom automatically detects:
+
+1. **Inside wezterm pane** → uses `wezterm-split`
+2. **Mux server reachable** → uses `wezterm-tab`
+3. **Otherwise** → falls back to `wezterm-window`
+
+## Custom Terminal Commands
+
+You can use any terminal emulator by providing a custom command template:
+
+```bash
+# Custom command (must include {script} placeholder)
+hcom config terminal "my-terminal -e bash {script}"
+```
+
+### Available Placeholders
+
+- `{script}` - Path to the launch script (required)
+- `{process_id}` - hcom process ID
+- `{pid}` - System process ID
+
+Example:
+
+```bash
+# Alacritty with custom title
+hcom config terminal "alacritty --title 'Agent' -e bash {script}"
+
+# Custom terminal with process ID in title
+hcom config terminal "myterm --title 'Agent {process_id}' -e bash {script}"
+```
+
+## Custom Terminal Presets
+
+Define reusable terminal presets in `~/.hcom/config.toml` with both **open** and **close** commands:
+
+```toml
+[terminal.presets.ghostty-tab]
+open = "ghostty-tab -- bash {script}"
+close = "ghostty-tab --close {id}"
+binary = "ghostty-tab"
+pane_id_env = "GHOSTTY_TAB_ID"
+```
+
+### Preset Fields
+
+- `open` - Command to launch (must include `{script}`)
+- `close` - Command to close the terminal (optional)
+- `binary` - Binary name for PATH detection (optional)
+- `pane_id_env` - Environment variable containing pane/tab ID (optional)
+- `app_name` - macOS app bundle name (optional, for .app fallback)
+
+### Close Command Placeholders
+
+- `{id}` - Captured stdout from `open` command
+- `{pid}` - Process ID
+- `{pane_id}` - Value from `pane_id_env` variable
+- `{process_id}` - hcom process ID
+
+### Example: Alacritty with tmux
+
+```toml
+[terminal.presets.alacritty-tmux]
+open = "alacritty -e tmux new-session -d bash {script} \; attach"
+close = "tmux kill-session -t {process_id}"
+binary = "alacritty"
+```
+
+### Using Custom Presets
+
+```bash
+# Set your custom preset
+hcom config terminal ghostty-tab
+
+# Launch agents
+hcom 3 claude  # Opens 3 new ghostty tabs
+```
+
+## macOS App Bundle Fallback
+
+On macOS, if a terminal's CLI binary isn't in PATH but the `.app` bundle exists, hcom automatically uses the app bundle:
+
+```bash
+# These work even if 'kitty' isn't in PATH:
+hcom config terminal kitty-window
+# → Uses: open -n -a kitty.app --args {script}
+
+hcom config terminal wezterm-window
+# → Uses: open -n -a WezTerm.app --args start -- bash {script}
+```
+
+## Troubleshooting
+
+### "Terminal launch failed"
+
+**Check if binary is in PATH:**
+
+```bash
+which kitty
+which wezterm
+```
+
+**On macOS, check for app bundle:**
+
+```bash
+ls /Applications/kitty.app
+ls /Applications/WezTerm.app
+```
+
+### Kitty Remote Control Not Working
+
+**Verify socket exists:**
+
+```bash
+ls -la /tmp/kitty*
+```
+
+**Test remote control:**
+
+```bash
+kitten @ --to unix:/tmp/kitty ls
+```
+
+**Check kitty.conf:**
+
+```bash
+grep -E '(allow_remote_control|listen_on)' ~/.config/kitty/kitty.conf
+```
+
+### Permission Denied
+
+**Make sure launch scripts are executable:**
+
+```bash
+ls -la ~/.hcom/launch/
+# Scripts should have -rwx------ permissions
+```
+
+**Check HCOM_DIR permissions:**
+
+```bash
+ls -la ~/.hcom
+# Should be owned by your user
+```
+
+### Terminal Opens But Agent Doesn't Start
+
+**Check PATH in split/tab environments:**
+
+Kitty splits and wezterm tabs may have minimal PATH. hcom automatically adds common binary locations, but you can verify:
+
+```bash
+# Inside a split/tab, check:
+echo $PATH
+which claude
+which python3
+```
+
+**Check launch logs:**
+
+```bash
+hcom status --logs
+```
+
+## Debug Mode
+
+Print the launch script without executing:
+
+```bash
+hcom 1 claude --terminal print
+```
+
+This shows the exact bash script that would be executed, useful for debugging custom terminal commands.
+
+## Environment Variables
+
+```bash
+# Override terminal for a single launch
+HCOM_TERMINAL=kitty-split hcom 3 claude
+
+# Disable terminal context leaking
+# (hcom automatically unsets KITTY_WINDOW_ID, WEZTERM_PANE, etc.)
+```
+
+## Best Practices
+
+1. **Use managed terminals** (kitty, wezterm, tmux) for the best experience
+2. **Enable remote control** for kitty/wezterm to get tab/split support
+3. **Test custom commands** with `--terminal print` before committing
+4. **Avoid shell injection** - never use backticks, `$()`, or pipes in custom commands
+5. **Use absolute paths** if your terminal binary isn't in PATH
