@@ -1,0 +1,167 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "hcom",
+  "projectDescription": "Multi-agent communication system that lets AI agents message, watch, and spawn each other across terminals.",
+  "theme": "aspen",
+  "primaryColor": "#22c55e",
+  "lightColor": "#86efac",
+  "darkColor": "#16a34a",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/agents",
+              "concepts/messaging",
+              "concepts/events",
+              "concepts/hooks"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/launching-agents",
+              "guides/sending-messages",
+              "guides/event-subscriptions",
+              "guides/transcripts",
+              "guides/bundles",
+              "guides/workflows",
+              "guides/cross-device"
+            ]
+          },
+          {
+            "group": "Integration",
+            "pages": [
+              "integration/claude-code",
+              "integration/gemini-cli",
+              "integration/codex",
+              "integration/opencode",
+              "integration/custom-agents"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/terminal-configuration",
+              "advanced/custom-workflows",
+              "advanced/relay-setup",
+              "advanced/sandboxing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI Reference",
+        "groups": [
+          {
+            "group": "Agent Management",
+            "pages": [
+              "cli/launch",
+              "cli/start",
+              "cli/stop",
+              "cli/list",
+              "cli/resume",
+              "cli/fork",
+              "cli/kill"
+            ]
+          },
+          {
+            "group": "Communication",
+            "pages": [
+              "cli/send",
+              "cli/listen",
+              "cli/transcript",
+              "cli/bundle"
+            ]
+          },
+          {
+            "group": "Events & Monitoring",
+            "pages": [
+              "cli/events",
+              "cli/term",
+              "cli/status"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "cli/config",
+              "cli/hooks",
+              "cli/relay"
+            ]
+          },
+          {
+            "group": "Workflows & Utilities",
+            "pages": [
+              "cli/run",
+              "cli/archive",
+              "cli/reset"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Use Cases",
+            "pages": [
+              "examples/code-review",
+              "examples/parallel-tasks",
+              "examples/context-handoff",
+              "examples/debugging",
+              "examples/multi-agent-debate"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-agent messaging with @mentions, threads, and intents",
+    "Event subscriptions and real-time activity monitoring",
+    "Cross-agent transcript sharing with detail levels",
+    "Agent spawning, forking, and lifecycle management",
+    "Terminal PTY control and text injection",
+    "Context bundles for structured handoffs",
+    "Cross-device synchronization via MQTT relay",
+    "File edit collision detection",
+    "Workflow automation with custom scripts",
+    "TUI dashboard for monitoring all agents"
+  ],
+  "publicApiSurface": [
+    "hcom [N] claude|gemini|codex|opencode",
+    "hcom send",
+    "hcom listen",
+    "hcom list",
+    "hcom events",
+    "hcom events sub",
+    "hcom transcript",
+    "hcom bundle",
+    "hcom start",
+    "hcom stop",
+    "hcom r <name>",
+    "hcom f <name>",
+    "hcom kill",
+    "hcom config",
+    "hcom hooks",
+    "hcom relay",
+    "hcom run",
+    "hcom term",
+    "hcom archive",
+    "hcom reset",
+    "hcom status"
+  ]
+}
